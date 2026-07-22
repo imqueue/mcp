@@ -44,7 +44,7 @@ try {
 
   const list = await rpc(2, "tools/list", {});
   const names = (list.result?.tools ?? []).map((t) => t.name).sort();
-  const expected = ["cli_help", "cli_status", "create_service", "generate_client", "get_doc", "list_packages", "scaffold_client", "scaffold_service", "search_docs"];
+  const expected = ["cli_help", "cli_install", "cli_status", "config", "create_service", "fleet", "generate_client", "get_doc", "list_packages", "scaffold_client", "scaffold_service", "search_docs"];
   check("tools/list", JSON.stringify(names) === JSON.stringify(expected), names.join(", "));
 
   const svc = await rpc(3, "tools/call", { name: "scaffold_service", arguments: { name: "user", methods: [{ name: "getUser", description: "Fetch a user by id", params: [{ name: "id", type: "number" }], returns: "User" }] } });

@@ -19,22 +19,27 @@ const NOT_FOUND =
   "The `imq` CLI was not found on PATH. Install it with `npm i -g @imqueue/cli`, " +
   "or use scaffold_service/scaffold_client for offline code templates.";
 
-/** Run `imq` with args in cwd. Never rejects — returns a structured result. */
-export function runImq(args: string[], cwd?: string, timeoutMs = 60_000): Promise<CliResult> {
+/** Run any binary with args. Never rejects — returns a structured result. */
+function exec(
+  file: string,
+  args: string[],
+  opts: { cwd?: string; timeoutMs?: number; notFound?: string } = {},
+): Promise<CliResult> {
+  const { cwd, timeoutMs = 60_000, notFound = `\`${file}\` was not found on PATH.` } = opts;
   return new Promise((resolve) => {
     execFile(
-      "imq",
+      file,
       args,
       { cwd: cwd || process.cwd(), timeout: timeoutMs, encoding: "utf8", windowsHide: true },
       (err, stdout, stderr) => {
         const e = err as (ExecFileException & { killed?: boolean }) | null;
         if (e && e.code === "ENOENT") {
-          resolve({ ok: false, code: null, output: NOT_FOUND });
+          resolve({ ok: false, code: null, output: notFound });
           return;
         }
         const out = `${stdout || ""}${stderr || ""}`.trim();
         if (e && e.killed) {
-          resolve({ ok: false, code: null, output: `imq timed out after ${timeoutMs}ms. If it was waiting for input, pass the missing flags (see cli_help) or use create_service without apply for a dry-run.\n\n${out}` });
+          resolve({ ok: false, code: null, output: `${file} timed out after ${timeoutMs}ms. If it was waiting for input, pass the required flags/values (see cli_help) instead.\n\n${out}` });
           return;
         }
         const code = typeof e?.code === "number" ? e.code : e ? 1 : 0;
@@ -42,6 +47,64 @@ export function runImq(args: string[], cwd?: string, timeoutMs = 60_000): Promis
       },
     );
   });
+}
+
+/** Run `imq` with args in cwd. Never rejects — returns a structured result. */
+export function runImq(args: string[], cwd?: string, timeoutMs = 60_000): Promise<CliResult> {
+  return exec("imq", args, { cwd, timeoutMs, notFound: NOT_FOUND });
+}
+
+/** Install @imqueue/cli globally via npm. */
+export async function installCli(version = "latest"): Promise<string> {
+  const spec = `@imqueue/cli@${version}`;
+  const r = await exec("npm", ["install", "-g", spec], {
+    timeoutMs: 180_000,
+    notFound: "npm was not found on PATH.",
+  });
+  if (r.ok) {
+    return `Installed ${spec} globally. Run cli_status to confirm, then use create_service / generate_client / fleet / config.\n\n${r.output}`;
+  }
+  return `Failed to install ${spec} (npm exit ${r.code}). A global install may need a user-writable npm prefix (e.g. via nvm) or elevated permissions.\n\n${r.output}`;
+}
+
+/** Control the local services fleet: `imq ctl <start|stop|restart|status>`. */
+export async function fleet(opts: {
+  action: "start" | "stop" | "restart" | "status";
+  path?: string;
+  services?: string;
+  update?: boolean;
+  calm?: boolean;
+  verbose?: boolean;
+  cwd?: string;
+}): Promise<string> {
+  const args = ["ctl", opts.action];
+  if (opts.path) args.push("-p", opts.path);
+  if (opts.services) args.push("-s", opts.services);
+  if (opts.update) args.push("-u");
+  if (opts.calm) args.push("-c");
+  if (opts.verbose) args.push("-v");
+  const timeoutMs = opts.action === "status" ? 30_000 : 120_000;
+  const r = await runImq(args, opts.cwd, timeoutMs);
+  return `\`imq ${args.join(" ")}\`\n\n${r.output}`;
+}
+
+/** Manage CLI configuration: `imq config <check|get|set|init>`. */
+export async function config(opts: {
+  action: "check" | "get" | "set" | "init";
+  option?: string;
+  value?: string;
+  cwd?: string;
+}): Promise<string> {
+  const args = ["config", opts.action];
+  if (opts.action === "get" && opts.option) args.push(opts.option);
+  if (opts.action === "set") {
+    if (!opts.option || opts.value === undefined) {
+      return "config set requires both `option` and `value` (e.g. option='ci.provider', value='github-actions'). Nested keys use a dot-path.";
+    }
+    args.push(opts.option, opts.value);
+  }
+  const r = await runImq(args, opts.cwd, 30_000);
+  return `\`imq ${args.join(" ")}\`\n\n${r.output}`;
 }
 
 /** Detect the CLI and its version. */

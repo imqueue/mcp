@@ -19,11 +19,14 @@ When the `imq` CLI is installed locally, these drive the **real** CLI:
 | Tool | What it does |
 |---|---|
 | `cli_status` | Detect `imq` and report its version. |
+| `cli_install` | Install `@imqueue/cli` globally (`npm i -g @imqueue/cli`) when it's missing. |
 | `cli_help` | `imq <command> --help` — exact, version-accurate flags (no side effects). |
 | `create_service` | `imq service create` — **dry-run by default** (writes nothing); pass `apply: true` to actually create the project. |
 | `generate_client` | `imq client generate <Service>` — the real typed client (the service must be running). |
+| `fleet` | `imq ctl <start\|stop\|restart\|status>` — manage a directory of service repos. `status` is read-only. |
+| `config` | `imq config <check\|get\|set\|init>` — read/write CLI configuration (`set` for automation; `init` is interactive). |
 
-Calls run with stdin closed and a timeout, so a missing-flag prompt fails fast instead of hanging. If `imq` isn't installed, use the offline `scaffold_*` tools instead.
+Calls run with stdin closed and a timeout, so a missing-flag prompt fails fast instead of hanging. If `imq` isn't installed, run `cli_install` or use the offline `scaffold_*` tools.
 
 Docs are fetched live from imqueue.org's machine-readable feeds (`/llms.txt`, per-page `…/index.md` mirrors), so the server never ships stale content. It only ever fetches `imqueue.org`.
 

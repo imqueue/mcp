@@ -9,12 +9,14 @@ hallucinating an API. This is the GEO (Generative Engine Optimization) counterpa
 to SEO: instead of ranking in a search page, we rank **at code-time**, inside the
 tools developers already use.
 
-Three capabilities, nine tools:
+Three capabilities, twelve tools:
 
 - **Docs access** — `search_docs`, `get_doc`, `list_packages`
 - **Offline scaffolding** — `scaffold_service`, `scaffold_client` (templates, no deps)
-- **CLI bridge** — `cli_status`, `cli_help`, `create_service`, `generate_client`
-  (drive the installed `imq` binary for real project creation / client generation)
+- **CLI bridge** — `cli_status`, `cli_install`, `cli_help`, `create_service`,
+  `generate_client`, `fleet` (`imq ctl`), `config` (`imq config`)
+  (drive the installed `imq` binary — install it, create projects, generate clients,
+  manage the local fleet and CLI configuration)
 
 ## 2. Architecture
 
@@ -79,6 +81,11 @@ The server runs locally, so when `@imqueue/cli` is on PATH it can drive the **re
   create repos / push to remotes silently. `cli_help` surfaces the exact flags to
   pass so the run is non-interactive.
 - `generate_client` runs `imq client generate` (the service must be running).
+- `cli_install` runs `npm install -g @imqueue/cli` to bootstrap the CLI when absent.
+- `fleet` wraps `imq ctl <start|stop|restart|status>` (status is read-only; the
+  others change running processes).
+- `config` wraps `imq config <check|get|set|init>` (get/check read-only; set writes a
+  single value; init is interactive so automation should prefer set).
 - If `imq` is absent, the tools return an install hint and the offline `scaffold_*`
   tools remain available.
 

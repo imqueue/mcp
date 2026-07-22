@@ -10,7 +10,7 @@ import { createRequire } from "node:module";
 import { searchDocs, getDoc } from "./docs.js";
 import { renderPackages } from "./packages.js";
 import { scaffoldService, scaffoldClient, type MethodSpec } from "./scaffold.js";
-import { cliStatus, cliHelp, createService, generateClient } from "./cli.js";
+import { cliStatus, cliHelp, createService, generateClient, installCli, fleet, config } from "./cli.js";
 
 // Read the version from package.json at runtime so it always matches the
 // published package (no hardcoded string to keep in sync).
@@ -219,6 +219,72 @@ server.registerTool(
   async ({ service, path, cwd }) => {
     try {
       return text(await generateClient(service, path, cwd));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "cli_install",
+  {
+    title: "Install the @imqueue CLI",
+    description:
+      "Install @imqueue/cli globally via `npm install -g @imqueue/cli`. Use when cli_status reports it's missing. A global install may require a user-writable npm prefix or elevated permissions.",
+    inputSchema: {
+      version: z.string().optional().describe("npm version/tag to install (default 'latest')"),
+    },
+  },
+  async ({ version }) => {
+    try {
+      return text(await installCli(version));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "fleet",
+  {
+    title: "Control the local @imqueue services fleet",
+    description:
+      "Run `imq ctl <action>` over a directory of service repositories. `status` is read-only; `start`/`stop`/`restart` change running processes. Requires `imq` (see cli_status).",
+    inputSchema: {
+      action: z.enum(["start", "stop", "restart", "status"]).describe("What to do to the fleet"),
+      path: z.string().optional().describe("Directory containing the service repositories (default '.')"),
+      services: z.string().optional().describe("Comma-separated service names; omit to scan the path"),
+      update: z.boolean().optional().describe("git pull each service before starting (start/restart)"),
+      calm: z.boolean().optional().describe("Start services one at a time, waiting for each to be ready"),
+      verbose: z.boolean().optional().describe("Verbose output"),
+      cwd: z.string().optional().describe("Working directory to run in"),
+    },
+  },
+  async ({ action, path, services, update, calm, verbose, cwd }) => {
+    try {
+      return text(await fleet({ action, path, services, update, calm, verbose, cwd }));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "config",
+  {
+    title: "Manage @imqueue CLI configuration",
+    description:
+      "Run `imq config <action>`. `check` = is config initialized; `get [option]` = read a value (or list all); `set option value` = write a value (nested keys use a dot-path, e.g. 'ci.provider'); `init` = interactive setup (prefer `set` for automation — `init` will time out non-interactively). Requires `imq` (see cli_status).",
+    inputSchema: {
+      action: z.enum(["check", "get", "set", "init"]).describe("Config operation"),
+      option: z.string().optional().describe("Config key (dot-path for nested), for get/set"),
+      value: z.string().optional().describe("Value to set (required for `set`)"),
+      cwd: z.string().optional().describe("Working directory to run in"),
+    },
+  },
+  async ({ action, option, value, cwd }) => {
+    try {
+      return text(await config({ action, option, value, cwd }));
     } catch (e) {
       return fail(e);
     }
