@@ -1,0 +1,19 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "name": "io.github.imqueue/mcp",
+  "description": "Search @imqueue docs and scaffold typed services & clients from your AI coding agent.",
+  "status": "active",
+  "repository": {
+    "url": "https://github.com/imqueue/mcp",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@imqueue/mcp",
+      "version": "0.1.0",
+      "transport": { "type": "stdio" }
+    }
+  ]
+}

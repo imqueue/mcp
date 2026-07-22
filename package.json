@@ -1,0 +1,52 @@
+{
+  "name": "@imqueue/mcp",
+  "version": "0.1.0",
+  "description": "Model Context Protocol server for @imqueue — lets AI coding agents search the docs and scaffold typed services & clients.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "imqueue",
+    "ai",
+    "coding-assistant",
+    "cursor",
+    "claude",
+    "rpc",
+    "microservices",
+    "nodejs",
+    "typescript"
+  ],
+  "homepage": "https://imqueue.org",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imqueue/mcp.git"
+  },
+  "license": "GPL-3.0",
+  "author": "imqueue.com <support@imqueue.com>",
+  "type": "module",
+  "bin": {
+    "imqueue-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "SPEC.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "smoke": "node scripts/smoke.mjs",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

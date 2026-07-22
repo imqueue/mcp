@@ -1,0 +1,10 @@
+# Smithery deployment config (https://smithery.ai).
+# stdio server started from the built output.
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties: {}
+    additionalProperties: false
+  commandFunction: |-
+    (config) => ({ command: 'node', args: ['dist/index.js'] })
