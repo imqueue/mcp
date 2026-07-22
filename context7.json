@@ -1,0 +1,13 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "@imqueue/mcp",
+  "description": "Model Context Protocol server for @imqueue — lets AI coding agents search the docs and scaffold typed services & clients from the editor.",
+  "excludeFolders": ["src", "lib", "dist", "node_modules", "test", "tests", "coverage"],
+  "excludeFiles": ["CHANGELOG.md", "LICENSE"],
+  "rules": [
+    "Run the server over stdio with `npx -y @imqueue/mcp`; add it to your AI tool's MCP config (mcpServers, or servers + type:stdio for VS Code / Visual Studio).",
+    "Docs tools (search_docs, get_doc, list_packages) are read-only; scaffold_service, scaffold_client and the CLI-bridge tools change state.",
+    "create_service is dry-run by default — pass apply:true to actually write files.",
+    "See the install matrix and tool reference at imqueue.org/mcp/."
+  ]
+}
