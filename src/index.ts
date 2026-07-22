@@ -5,9 +5,16 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
+import { createRequire } from "node:module";
+
 import { searchDocs, getDoc } from "./docs.js";
 import { renderPackages } from "./packages.js";
 import { scaffoldService, scaffoldClient, type MethodSpec } from "./scaffold.js";
+
+// Read the version from package.json at runtime so it always matches the
+// published package (no hardcoded string to keep in sync).
+const require = createRequire(import.meta.url);
+const { version } = require("../package.json") as { version: string };
 
 const text = (t: string) => ({ content: [{ type: "text" as const, text: t }] });
 const fail = (e: unknown) => ({
@@ -32,7 +39,7 @@ const methodSchema = z
   })
   .strict();
 
-const server = new McpServer({ name: "imqueue", version: "0.1.0" });
+const server = new McpServer({ name: "imqueue", version });
 
 server.registerTool(
   "search_docs",
