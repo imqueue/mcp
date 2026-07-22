@@ -1,6 +1,8 @@
 # @imqueue/mcp
 
-A [Model Context Protocol](https://modelcontextprotocol.io) server for **[@imqueue](https://imqueue.org)**. It lets AI coding agents (Claude Code, Cursor, Windsurf, VS Code, …) **search the @imqueue documentation** and **scaffold typed services & clients** — so they generate correct, idiomatic @imqueue code instead of guessing.
+A [Model Context Protocol](https://modelcontextprotocol.io) server for **[@imqueue](https://imqueue.org)**. It lets AI coding agents (Claude Code, Cursor, VS Code, JetBrains, …) **search the @imqueue documentation**, **scaffold typed services & clients**, and **drive the `imq` CLI** — so they generate correct, idiomatic @imqueue code instead of guessing.
+
+📖 **Full documentation: [imqueue.org/mcp](https://imqueue.org/mcp/)** — per-client setup, complete tools reference, agent workflows and the safety model.
 
 ## Tools
 
@@ -45,7 +47,7 @@ npx -y @imqueue/mcp
 claude mcp add imqueue -- npx -y @imqueue/mcp
 ```
 
-### Cursor / Windsurf / VS Code / Claude Desktop
+### Other clients (Cursor, Claude Desktop, JetBrains, Windsurf, Zed, …)
 
 Add to your MCP config (`.cursor/mcp.json`, `claude_desktop_config.json`, …):
 
@@ -59,6 +61,8 @@ Add to your MCP config (`.cursor/mcp.json`, `claude_desktop_config.json`, …):
   }
 }
 ```
+
+> **VS Code and Visual Studio** use a top-level `servers` key with `"type": "stdio"` instead of `mcpServers`. See **[imqueue.org/mcp/installation](https://imqueue.org/mcp/installation/)** for the exact config file path and snippet for every client.
 
 ## Develop
 
@@ -79,4 +83,4 @@ npm run smoke      # JSON-RPC handshake + tools/list + tool calls
 
 GPL-3.0. Commercial licensing & support for closed-source products: [imqueue.com](https://imqueue.com).
 
-See [SPEC.md](./SPEC.md) for the full design and registry-distribution plan.
+Full docs: **[imqueue.org/mcp](https://imqueue.org/mcp/)**. See [SPEC.md](./SPEC.md) for the design and registry-distribution plan.
