@@ -9,12 +9,12 @@ hallucinating an API. This is the GEO (Generative Engine Optimization) counterpa
 to SEO: instead of ranking in a search page, we rank **at code-time**, inside the
 tools developers already use.
 
-Three capabilities, twelve tools:
+Three capabilities, thirteen tools:
 
 - **Docs access** — `search_docs`, `get_doc`, `list_packages`
 - **Offline scaffolding** — `scaffold_service`, `scaffold_client` (templates, no deps)
 - **CLI bridge** — `cli_status`, `cli_install`, `cli_help`, `create_service`,
-  `generate_client`, `fleet` (`imq ctl`), `config` (`imq config`)
+  `generate_client`, `fleet` (`imq ctl`), `config` (`imq config`), `logs` (`imq log`)
   (drive the installed `imq` binary — install it, create projects, generate clients,
   manage the local fleet and CLI configuration)
 

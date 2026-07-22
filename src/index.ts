@@ -10,7 +10,7 @@ import { createRequire } from "node:module";
 import { searchDocs, getDoc } from "./docs.js";
 import { renderPackages } from "./packages.js";
 import { scaffoldService, scaffoldClient, type MethodSpec } from "./scaffold.js";
-import { cliStatus, cliHelp, createService, generateClient, installCli, fleet, config } from "./cli.js";
+import { cliStatus, cliHelp, createService, generateClient, installCli, fleet, config, logs } from "./cli.js";
 
 // Read the version from package.json at runtime so it always matches the
 // published package (no hardcoded string to keep in sync).
@@ -285,6 +285,28 @@ server.registerTool(
   async ({ action, option, value, cwd }) => {
     try {
       return text(await config({ action, option, value, cwd }));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "logs",
+  {
+    title: "Read or clean @imqueue fleet logs",
+    description:
+      "Work with logs of services started by `imq ctl`. action='dump' (default) returns the current combined logs and exits — it never follows/streams, and output is capped. action='clean' deletes collected logs. Requires `imq` (see cli_status).",
+    inputSchema: {
+      action: z.enum(["dump", "clean"]).optional().describe("dump = read current logs (default); clean = delete collected logs"),
+      services: z.string().optional().describe("Comma-separated service names; omit to combine all"),
+      prefix: z.boolean().optional().describe("Prefix each line with the service name (default true)"),
+      cwd: z.string().optional().describe("Working directory to run in"),
+    },
+  },
+  async ({ action, services, prefix, cwd }) => {
+    try {
+      return text(await logs({ action, services, prefix, cwd }));
     } catch (e) {
       return fail(e);
     }

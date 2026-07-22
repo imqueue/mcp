@@ -107,6 +107,36 @@ export async function config(opts: {
   return `\`imq ${args.join(" ")}\`\n\n${r.output}`;
 }
 
+const LOG_MAX = 20_000; // cap dumped log output so it can't flood the agent context
+
+/** Read (dump) or clean fleet logs: `imq log`. Never follows (that would hang). */
+export async function logs(opts: {
+  action?: "dump" | "clean";
+  services?: string;
+  prefix?: boolean;
+  cwd?: string;
+}): Promise<string> {
+  if ((opts.action ?? "dump") === "clean") {
+    const r = await runImq(["log", "--clean"], opts.cwd, 30_000);
+    return `\`imq log --clean\`\n\n${r.output}`;
+  }
+  const args = ["log"];
+  if (opts.services) {
+    args.push(...opts.services.split(",").map((s) => s.trim()).filter(Boolean));
+  }
+  args.push("--no-follow"); // always bounded — the streaming --follow default is unsafe here
+  if (opts.prefix === false) args.push("--no-prefix");
+
+  const r = await runImq(args, opts.cwd, 30_000);
+  let out = r.output;
+  let note = "";
+  if (out.length > LOG_MAX) {
+    out = out.slice(-LOG_MAX);
+    note = ` (truncated to last ${LOG_MAX} chars)`;
+  }
+  return `\`imq ${args.join(" ")}\`${note}\n\n${out}`;
+}
+
 /** Detect the CLI and its version. */
 export async function cliStatus(): Promise<string> {
   const r = await runImq(["--version"], undefined, 15_000);

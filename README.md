@@ -25,6 +25,7 @@ When the `imq` CLI is installed locally, these drive the **real** CLI:
 | `generate_client` | `imq client generate <Service>` — the real typed client (the service must be running). |
 | `fleet` | `imq ctl <start\|stop\|restart\|status>` — manage a directory of service repos. `status` is read-only. |
 | `config` | `imq config <check\|get\|set\|init>` — read/write CLI configuration (`set` for automation; `init` is interactive). |
+| `logs` | `imq log` — `dump` current fleet logs (never follows; capped) or `clean` them. |
 
 Calls run with stdin closed and a timeout, so a missing-flag prompt fails fast instead of hanging. If `imq` isn't installed, run `cli_install` or use the offline `scaffold_*` tools.
 
