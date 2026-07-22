@@ -106,7 +106,7 @@ Publish `@imqueue/mcp` to npm, then list it everywhere agents discover servers:
 
 | Channel | Artifact / action |
 |---|---|
-| **Official MCP registry** | `server.json` (this repo) → publish via `mcp-publisher`. Namespace `io.github.imqueue/mcp`. |
+| **Official MCP registry** | `server.json` (this repo) → publish via `mcp-publisher`. Namespace `org.imqueue/mcp` (DNS auth on imqueue.org). |
 | **Smithery** | `smithery.yaml` (this repo) → connect the GitHub repo. |
 | **mcp.so / PulseMCP / Glama** | Auto-index from npm + GitHub; submit/claim the listing. |
 | **Cursor / VS Code directories** | Add the `mcpServers` JSON snippet to their community lists. |
