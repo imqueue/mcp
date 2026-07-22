@@ -9,10 +9,12 @@ hallucinating an API. This is the GEO (Generative Engine Optimization) counterpa
 to SEO: instead of ranking in a search page, we rank **at code-time**, inside the
 tools developers already use.
 
-Two capabilities, five tools:
+Three capabilities, nine tools:
 
 - **Docs access** — `search_docs`, `get_doc`, `list_packages`
-- **Scaffolding** — `scaffold_service`, `scaffold_client`
+- **Offline scaffolding** — `scaffold_service`, `scaffold_client` (templates, no deps)
+- **CLI bridge** — `cli_status`, `cli_help`, `create_service`, `generate_client`
+  (drive the installed `imq` binary for real project creation / client generation)
 
 ## 2. Architecture
 
@@ -66,6 +68,19 @@ starter template. Points to `imq service create` for a fully provider-wired proj
 @imqueue generates the **real** typed client from a **running** service
 (`imq client generate <Name>`), so types never drift. The tool returns that command
 plus an illustrative usage snippet (it does not fabricate a client that could go stale).
+
+### CLI bridge — `cli_status`, `cli_help`, `create_service`, `generate_client`
+The server runs locally, so when `@imqueue/cli` is on PATH it can drive the **real**
+`imq` (see `src/cli.ts`). Safety posture:
+- Every call runs `imq` with **stdin closed and a timeout**, so an interactive prompt
+  (a missing flag) fails fast with guidance rather than hanging the server.
+- `create_service` runs `imq service create … --dry-run` **by default** (writes
+  nothing); a real run requires an explicit `apply: true` — an agent must never
+  create repos / push to remotes silently. `cli_help` surfaces the exact flags to
+  pass so the run is non-interactive.
+- `generate_client` runs `imq client generate` (the service must be running).
+- If `imq` is absent, the tools return an install hint and the offline `scaffold_*`
+  tools remain available.
 
 ## 4. Input schemas (zod)
 

@@ -10,6 +10,7 @@ import { createRequire } from "node:module";
 import { searchDocs, getDoc } from "./docs.js";
 import { renderPackages } from "./packages.js";
 import { scaffoldService, scaffoldClient, type MethodSpec } from "./scaffold.js";
+import { cliStatus, cliHelp, createService, generateClient } from "./cli.js";
 
 // Read the version from package.json at runtime so it always matches the
 // published package (no hardcoded string to keep in sync).
@@ -136,6 +137,88 @@ server.registerTool(
   async ({ service, methods }) => {
     try {
       return text(scaffoldClient(service, methods as MethodSpec[] | undefined));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+// --- CLI-backed tools (require the `imq` binary on PATH) --------------------
+
+server.registerTool(
+  "cli_status",
+  {
+    title: "Check the @imqueue CLI",
+    description:
+      "Detect whether the `imq` CLI (@imqueue/cli) is installed locally and report its version. Call this before create_service/generate_client; if it's missing, fall back to scaffold_service/scaffold_client.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      return text(await cliStatus());
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "cli_help",
+  {
+    title: "Show @imqueue CLI help",
+    description:
+      "Run `imq [command] --help` and return the exact, version-accurate flags for a command (e.g. 'service create', 'client generate'). Use this to discover the flags to pass to create_service. No side effects.",
+    inputSchema: {
+      command: z.string().optional().describe("A subcommand, e.g. 'service create' (omit for top-level help)"),
+    },
+  },
+  async ({ command }) => {
+    try {
+      return text(await cliHelp(command));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "create_service",
+  {
+    title: "Create an @imqueue service with the CLI",
+    description:
+      "Scaffold a real, provider-wired @imqueue service via `imq service create`. Runs as a DRY-RUN by default (shows the plan, writes nothing). Set apply=true to actually create it — that writes files and may init git / configure CI / push to a remote, so only apply with the user's intent. Pass CLI flags (see cli_help) to avoid interactive prompts. Requires `imq` (see cli_status).",
+    inputSchema: {
+      name: z.string().describe("Service name, e.g. 'user'"),
+      path: z.string().optional().describe("Target directory (optional)"),
+      flags: z.array(z.string()).optional().describe("Extra `imq` flags, e.g. ['--vcs','github','--ci','github-actions']. Get exact flags from cli_help."),
+      cwd: z.string().optional().describe("Working directory to run in (defaults to the server's cwd)"),
+      apply: z.boolean().optional().describe("false/omitted = dry-run preview; true = actually create (writes files)"),
+    },
+  },
+  async ({ name, path, flags, cwd, apply }) => {
+    try {
+      return text(await createService({ name, path, flags, cwd, apply }));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "generate_client",
+  {
+    title: "Generate a typed client with the CLI",
+    description:
+      "Run `imq client generate <Service>` to emit the real, fully-typed client. The target service must be RUNNING (the CLI introspects the live service). Requires `imq` (see cli_status).",
+    inputSchema: {
+      service: z.string().describe("Service name to generate a client for, e.g. 'User' / 'UserService'"),
+      path: z.string().optional().describe("Output directory (optional)"),
+      cwd: z.string().optional().describe("Working directory to run in"),
+    },
+  },
+  async ({ service, path, cwd }) => {
+    try {
+      return text(await generateClient(service, path, cwd));
     } catch (e) {
       return fail(e);
     }

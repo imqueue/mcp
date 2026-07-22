@@ -9,8 +9,21 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server for **[@imque
 | `search_docs` | Search the official docs (guides, tutorial, CLI manual, API reference, articles) and return the most relevant pages + URLs. |
 | `get_doc` | Fetch the full markdown of a doc page by URL. |
 | `list_packages` | List the main @imqueue packages with install commands. |
-| `scaffold_service` | Generate an `IMQService` subclass with `@expose()`d, JSDoc-typed methods + a bootstrap. |
-| `scaffold_client` | Show how to generate and use the fully-typed client for a service. |
+| `scaffold_service` | Generate an `IMQService` subclass with `@expose()`d, JSDoc-typed methods + a bootstrap (offline, no CLI needed). |
+| `scaffold_client` | Show how to generate and use the fully-typed client for a service (offline). |
+
+### CLI-backed tools (require `@imqueue/cli` on PATH)
+
+When the `imq` CLI is installed locally, these drive the **real** CLI:
+
+| Tool | What it does |
+|---|---|
+| `cli_status` | Detect `imq` and report its version. |
+| `cli_help` | `imq <command> --help` — exact, version-accurate flags (no side effects). |
+| `create_service` | `imq service create` — **dry-run by default** (writes nothing); pass `apply: true` to actually create the project. |
+| `generate_client` | `imq client generate <Service>` — the real typed client (the service must be running). |
+
+Calls run with stdin closed and a timeout, so a missing-flag prompt fails fast instead of hanging. If `imq` isn't installed, use the offline `scaffold_*` tools instead.
 
 Docs are fetched live from imqueue.org's machine-readable feeds (`/llms.txt`, per-page `…/index.md` mirrors), so the server never ships stale content. It only ever fetches `imqueue.org`.
 
