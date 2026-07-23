@@ -190,7 +190,7 @@ server.registerTool(
     inputSchema: {
       name: z.string().describe("Service name, e.g. 'user'"),
       path: z.string().optional().describe("Target directory (optional)"),
-      flags: z.array(z.string()).optional().describe("Extra `imq` flags, e.g. ['--vcs','github','--ci','github-actions']. Get exact flags from cli_help."),
+      flags: z.array(z.string()).optional().describe("Extra `imq` flags, e.g. ['--vcs','github','--ci','github-actions'] or feature selection ['--packages','pg-prisma,validation,opentelemetry,gcp','-D']. Get exact flags from cli_help."),
       cwd: z.string().optional().describe("Working directory to run in (defaults to the server's cwd)"),
       apply: z.boolean().optional().describe("false/omitted = dry-run preview; true = actually create (writes files)"),
     },

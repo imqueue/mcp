@@ -13,6 +13,8 @@ export const PACKAGES: PkgInfo[] = [
   { name: "@imqueue/core", install: "npm i @imqueue/core", summary: "The Redis-backed messaging-queue engine shared by the framework (usually a transitive dependency of rpc)." },
   { name: "@imqueue/cli", install: "npm i -g @imqueue/cli", summary: "The `imq` CLI: scaffolds services, wires VCS/CI/registry providers, generates typed clients and runs a local fleet." },
   { name: "@imqueue/job", install: "npm i @imqueue/job", summary: "Simple, safe-by-default Redis job queue — delayed/scheduled jobs, guaranteed processing, retries." },
+  { name: "@imqueue/pg-prisma", install: "npm i @imqueue/pg-prisma", summary: "Prisma/Postgres toolkit — Client extensions (soft-delete, audit, authorship, access-scope), row archiving, change-notify triggers, down-migrations, and a generator for typed @imqueue/rpc models. Selectable in `imq service create` via --packages pg-prisma." },
+  { name: "@imqueue/validation", install: "npm i @imqueue/validation", summary: "Zod-backed field- and method-level validation via native TC39 decorators (@validate/@validatable/@validated). Selectable via --packages validation." },
   { name: "@imqueue/pg-pubsub", install: "npm i @imqueue/pg-pubsub", summary: "Reliable PostgreSQL LISTEN/NOTIFY with inter-process lock support." },
   { name: "@imqueue/pg-cache", install: "npm i @imqueue/pg-cache", summary: "PostgreSQL-managed cache on Redis for @imqueue service methods." },
   { name: "@imqueue/async-logger", install: "npm i @imqueue/async-logger", summary: "Configurable async logger over winston for @imqueue services." },
