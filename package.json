@@ -1,6 +1,6 @@
 {
   "name": "@imqueue/mcp",
-  "version": "1.1.3",
+  "version": "1.2.0",
   "mcpName": "org.imqueue/mcp",
   "description": "Model Context Protocol server for @imqueue — lets AI coding agents search the docs and scaffold typed services & clients.",
   "keywords": [
