@@ -41,7 +41,10 @@
     "smoke": "node scripts/smoke.mjs",
     "version": "node scripts/sync-version.mjs && git add server.json",
     "prepublishOnly": "npm run build",
-    "postpublish": "node scripts/publish-registry.mjs"
+    "postpublish": "node scripts/publish-registry.mjs",
+    "typecheck:worker": "tsc --noEmit -p worker/tsconfig.json",
+    "dev:worker": "wrangler dev",
+    "deploy:worker": "wrangler deploy"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
@@ -50,6 +53,7 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "wrangler": "^4.0.0"
   }
 }

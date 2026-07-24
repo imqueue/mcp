@@ -1,0 +1,16 @@
+{
+  // Cloudflare Workers config for the hosted @imqueue MCP server.
+  // Deploy: `npx wrangler deploy`  (see worker/README.md)
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "imqueue-mcp",
+  "main": "worker/worker.ts",
+  "compatibility_date": "2025-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  // Binds the Worker to mcp.imqueue.org. Requires the imqueue.org zone to live
+  // in the SAME Cloudflare account you deploy from (it does — the site is on
+  // Cloudflare). If you'd rather wire the domain in the dashboard, delete this
+  // block and add a Custom Domain under the Worker's Settings → Domains.
+  "routes": [{ "pattern": "mcp.imqueue.org", "custom_domain": true }]
+}
