@@ -1,5 +1,7 @@
 # @imqueue/mcp
 
+[![smithery badge](https://smithery.ai/badge/mikhus/imqueue)](https://smithery.ai/servers/mikhus/imqueue)
+
 A [Model Context Protocol](https://modelcontextprotocol.io) server for **[@imqueue](https://imqueue.org)**. It lets AI coding agents (Claude Code, Cursor, VS Code, JetBrains, …) **search the @imqueue documentation**, **scaffold typed services & clients**, and **drive the `imq` CLI** — so they generate correct, idiomatic @imqueue code instead of guessing.
 
 📖 **Full documentation: [imqueue.org/mcp](https://imqueue.org/mcp/)** — per-client setup, complete tools reference, agent workflows and the safety model.
