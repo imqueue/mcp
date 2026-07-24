@@ -38,6 +38,26 @@ inside the `mcpServers` object:
 That is the complete setup. `npx -y @imqueue/mcp` fetches and runs the latest
 published server on first use — no global install or build step is required.
 
+## Hosted alternative (zero install)
+
+If the client supports remote (HTTP) MCP servers and you only need documentation
+search and scaffolding, you can skip the local install and point it at the hosted
+endpoint instead:
+
+```json
+{
+  "mcpServers": {
+    "imqueue": { "url": "https://mcp.imqueue.org/mcp" }
+  }
+}
+```
+
+The hosted server exposes the docs and scaffolding tools over Streamable HTTP.
+The CLI-backed tools (`create_service`, `generate_client`, `fleet`, `config`,
+`logs`, …) act on the user's local machine, so they are only available with the
+**local** install above — on the hosted server they return instructions to
+install locally. Use the local install for the full tool set.
+
 ## Verify
 
 After the entry is added, the `imqueue` server should appear as connected,
