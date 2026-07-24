@@ -81,6 +81,9 @@ npm run smoke      # JSON-RPC handshake + tools/list + tool calls
 
 ## License
 
-GPL-3.0. Commercial licensing & support for closed-source products: [imqueue.com](https://imqueue.com).
+GPL-3.0 — free and open source.
 
+## Commercial licensing
+
+Need to use @imqueue/mcp in a closed-source product, or want commercial support? A commercial license is available — see [imqueue.com](https://imqueue.com).
 Full docs: **[imqueue.org/mcp](https://imqueue.org/mcp/)**. See [SPEC.md](./SPEC.md) for the design and registry-distribution plan.
