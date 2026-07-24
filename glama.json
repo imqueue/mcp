@@ -1,4 +1,4 @@
 {
-    "$schema": "https://glama.ai/mcp/schemas/server.json",
-    "maintainers": ["Mikhus"]
+      "$schema": "https://glama.ai/mcp/schemas/server.json",
+      "maintainers": ["Mikhus", "SerhiyGreench", "creomobile"]
 }
