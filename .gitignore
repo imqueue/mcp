@@ -3,3 +3,8 @@ dist/
 *.log
 *.pem
 .DS_Store
+
+# Secrets — never commit (e.g. MCP_REGISTRY_KEY for the registry publish hook)
+.env
+.env.*
+.mcpregistry_token
