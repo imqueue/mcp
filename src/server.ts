@@ -71,6 +71,15 @@ const methodSchema = z
           name: z.string(),
           type: z.string().describe("TypeScript type, e.g. 'string' or 'number[]'"),
           description: z.string().optional(),
+          optional: z
+            .boolean()
+            .optional()
+            .describe(
+              "Mark the parameter optional. @expose() publishes required " +
+                "parameters as mandatory, so callers of the generated client " +
+                "must pass a value for every non-optional one — set this for " +
+                "any parameter a caller may legitimately skip.",
+            ),
         }),
       )
       .optional(),

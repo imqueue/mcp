@@ -6,7 +6,12 @@
 export interface MethodSpec {
   name: string;
   description?: string;
-  params?: { name: string; type: string; description?: string }[];
+  params?: {
+    name: string;
+    type: string;
+    description?: string;
+    optional?: boolean;
+  }[];
   returns?: string; // TypeScript return type (without the Promise<> wrapper)
 }
 
@@ -31,11 +36,23 @@ const DEFAULT_METHODS: MethodSpec[] = [
 function renderMethod(m: MethodSpec): string {
   const params = m.params ?? [];
   const ret = m.returns ?? "void";
-  const sig = params.map((p) => `${p.name}: ${p.type}`).join(", ");
+  const sig = params
+    .map((p) => `${p.name}${p.optional ? "?" : ""}: ${p.type}`)
+    .join(", ");
+  // JSDoc is the only type source @expose() has, and it reads two things
+  // positionally: a `{type}` leading the tag, and `[name]` brackets marking the
+  // param optional. Omit the braces and every param is published as `any`;
+  // omit the brackets and every param is published as required, which forces
+  // callers to pass a value for it explicitly. Always emit both.
   const jsdoc = [
     "    /**",
     `     * ${m.description ?? m.name}`,
-    ...params.map((p) => `     * @param ${p.name} - ${p.description ?? p.type}`),
+    ...params.map((p) => {
+      const name = p.optional ? `[${p.name}]` : p.name;
+      const desc = p.description ? ` - ${p.description}` : "";
+
+      return `     * @param {${p.type}} ${name}${desc}`;
+    }),
     `     * @return {Promise<${ret}>}`,
     "     */",
   ].join("\n");
@@ -59,11 +76,15 @@ ${body}
 }
 `;
 
-  const bootstrap = `import { ${cls} } from './${cls}';
+  // @imqueue/rpc 3.x is ESM-only, so a relative import needs the explicit
+  // .js extension — extensionless is a compile error under NodeNext.
+  const bootstrap = `import { ${cls} } from './${cls}.js';
 
 // Start the service so other services can call its @expose()d methods.
+// The queue name defaults to the class name; pass a different one as the
+// second constructor argument (the first is IMQServiceOptions).
 (async () => {
-    const service = new ${cls}({ name: '${cls}' });
+    const service = new ${cls}();
     await service.start();
     console.log('${cls} is up');
 })();
@@ -93,7 +114,7 @@ export function scaffoldClient(service: string, methods?: MethodSpec[]): string 
   const sample = (methods && methods[0]) || DEFAULT_METHODS[0];
   const args = (sample.params ?? []).map((p) => `/* ${p.name}: ${p.type} */`).join(", ");
 
-  const usage = `import { ${clientCls} } from './clients/${clientCls}';
+  const usage = `import { ${clientCls} } from './clients/${clientCls}.js';
 
 (async () => {
     const client = new ${clientCls}();
