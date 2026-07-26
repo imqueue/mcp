@@ -1,0 +1,114 @@
+name: Deploy hosted MCP server
+
+# The hosted server at https://mcp.imqueue.org is a Cloudflare Worker bundled by
+# Wrangler from worker/worker.ts + src/ — a SEPARATE artifact from the npm
+# package, which builds src/ only. `npm publish` therefore does nothing to it:
+# without this workflow the hosted endpoint silently drifts behind npm, serving
+# whatever tool/scaffolder code happened to be current at the last manual
+# `wrangler deploy`.
+#
+# Trigger: the GitHub Release that scripts/publish-github-release.mjs cuts from
+# the `postpublish` hook, i.e. immediately after `npm publish` succeeds. That
+# release is created with a personal token, so it does fire this workflow —
+# releases created by the in-Actions GITHUB_TOKEN would not. If that script is
+# ever skipped (no GITHUB_TOKEN on the publishing machine) no release is created
+# and nothing deploys, so use the manual trigger below to catch up.
+#
+# Required repository secrets — Settings → Secrets and variables → Actions:
+#   CLOUDFLARE_API_TOKEN   Cloudflare → API Tokens → "Edit Cloudflare Workers"
+#                          template, scoped to the account holding imqueue.org
+#   CLOUDFLARE_ACCOUNT_ID  Cloudflare → Workers & Pages → Account ID
+
+on:
+  release:
+    types: [published]
+  # Manual re-deploy, and the way to ship the first run of this workflow.
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Tag or branch to deploy (default: the default branch)'
+        required: false
+
+permissions:
+  contents: read
+
+# A deploy must never be cancelled half-way, and two must never race: queue.
+concurrency:
+  group: deploy-worker
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: wrangler deploy → mcp.imqueue.org
+    # Pre-releases stay off the production endpoint; ship them by hand if needed.
+    if: github.event_name == 'workflow_dispatch' || github.event.release.prerelease == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout the published commit
+        uses: actions/checkout@v4
+        with:
+          # The Worker reports package.json's version as its MCP serverInfo
+          # version, so deploy the exact tag that was published — not whatever
+          # the default branch has moved on to.
+          ref: ${{ github.event.release.tag_name || github.event.inputs.ref || github.ref }}
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+
+      - name: Check the Cloudflare credentials are present
+        # Fail with something actionable instead of deep inside wrangler.
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          missing=
+          [ -n "$CLOUDFLARE_API_TOKEN" ] || missing="$missing CLOUDFLARE_API_TOKEN"
+          [ -n "$CLOUDFLARE_ACCOUNT_ID" ] || missing="$missing CLOUDFLARE_ACCOUNT_ID"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secret(s):$missing — add them under Settings → Secrets and variables → Actions (see the header of this workflow for where each value comes from)."
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check the Worker
+        # Same gate the README tells a human to run before deploying by hand.
+        run: npm run typecheck:worker
+
+      - name: Deploy to Cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npm run deploy:worker
+
+      - name: Verify mcp.imqueue.org is serving this version
+        # A green `wrangler deploy` is not proof the endpoint moved. Poll the
+        # live MCP handshake until serverInfo.version matches what we just
+        # deployed, so drift between npm and the hosted server becomes a red
+        # build instead of something nobody notices for five releases.
+        run: |
+          set -u
+          expected="$(node -p "require('./package.json').version")"
+          echo "Expecting serverInfo.version = $expected"
+          parse='let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const m=s.match(/^data:\s*(.*)$/m);try{process.stdout.write(String(JSON.parse(m?m[1]:s).result.serverInfo.version))}catch{}});'
+          live=
+          for i in $(seq 1 20); do
+            live="$(curl -fsS --max-time 20 https://mcp.imqueue.org/mcp \
+              -H 'content-type: application/json' \
+              -H 'accept: application/json, text/event-stream' \
+              -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"github-actions","version":"0"}}}' \
+              | node -e "$parse" || true)"
+            if [ "$live" = "$expected" ]; then
+              echo "✔ mcp.imqueue.org is live on $expected (attempt $i)"
+              exit 0
+            fi
+            echo "waiting for propagation… got '${live:-no response}' ($i/20)"
+            sleep 6
+          done
+          echo "::error::mcp.imqueue.org still reports '${live:-no response}', expected $expected — the deploy did not take effect."
+          exit 1

@@ -49,6 +49,17 @@ You should get the tool list back. Try `search_docs` / `scaffold_service` calls 
 
 ## Deploy
 
+**Publishing deploys this Worker automatically.** `.github/workflows/deploy-worker.yml`
+runs on the GitHub Release that `postpublish` cuts right after `npm publish`, so
+the hosted endpoint tracks npm without anyone remembering to ship it. It
+type-checks, deploys the exact published tag, then polls the live MCP handshake
+until `serverInfo.version` matches — a deploy that silently doesn't take effect
+fails the build. It needs two repository secrets, `CLOUDFLARE_API_TOKEN` (the
+"Edit Cloudflare Workers" token template) and `CLOUDFLARE_ACCOUNT_ID`.
+
+To deploy by hand — a branch, a pre-release, or a catch-up after a publish that
+created no GitHub Release — use the workflow's **Run workflow** button, or:
+
 ```bash
 npx wrangler login      # first time only
 npm run deploy:worker   # wrangler deploy → provisions mcp.imqueue.org
@@ -72,5 +83,8 @@ Custom Domain under the Worker's **Settings → Domains**.
   `sessionIdGenerator` + Durable Object for session storage.
 - **CORS** is permissive (`*`) so browser-based MCP clients / a web playground can
   connect. Tighten `Access-Control-Allow-Origin` if you want to restrict it.
-- This Worker has been type-checked here but **not yet deployed** — validate with
-  `npm run dev:worker` before the first `deploy`.
+- **The Worker is a separate artifact from the npm package** — it is bundled from
+  `worker/worker.ts` + `src/`, while the tarball builds `src/` only. That is why
+  the deploy needs its own trigger: before it was automated the hosted endpoint
+  sat five releases behind npm (serving `2.0.0` while npm was on `2.0.5`),
+  because `npm publish` never touched it.
