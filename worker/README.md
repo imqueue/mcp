@@ -49,21 +49,29 @@ You should get the tool list back. Try `search_docs` / `scaffold_service` calls 
 
 ## Deploy
 
-**Publishing deploys this Worker automatically.** `.github/workflows/deploy-worker.yml`
-runs on the GitHub Release that `postpublish` cuts right after `npm publish`, so
-the hosted endpoint tracks npm without anyone remembering to ship it. It
-type-checks, deploys the exact published tag, then polls the live MCP handshake
-until `serverInfo.version` matches — a deploy that silently doesn't take effect
-fails the build. It needs two repository secrets, `CLOUDFLARE_API_TOKEN` (the
-"Edit Cloudflare Workers" token template) and `CLOUDFLARE_ACCOUNT_ID`.
+**`npm publish` deploys this Worker automatically.**
+[`../scripts/deploy-worker.mjs`](../scripts/deploy-worker.mjs) runs from the
+`postpublish` hook, so the hosted endpoint tracks npm without anyone remembering
+to ship it. It type-checks the Worker, runs `wrangler deploy`, then polls the
+live MCP handshake until `serverInfo.version` matches `package.json` — a deploy
+that silently doesn't take effect is an error rather than something nobody
+notices. Pre-releases are skipped so they never take over the production
+endpoint.
 
-To deploy by hand — a branch, a pre-release, or a catch-up after a publish that
-created no GitHub Release — use the workflow's **Run workflow** button, or:
+The only requirement is that `wrangler` is authenticated on the publishing
+machine (`npx wrangler whoami` to check, `npx wrangler login` once if not).
+Because the deploy runs from `postpublish`, wrangler bundles the very same
+working tree npm just packed — the tarball and the Worker cannot disagree.
+
+To deploy by hand — a branch, a pre-release, or a catch-up after a publish where
+the deploy step failed:
 
 ```bash
 npx wrangler login      # first time only
 npm run deploy:worker   # wrangler deploy → provisions mcp.imqueue.org
 ```
+
+Set `MCP_WORKER_SKIP=1` to publish without touching the hosted server.
 
 `wrangler.jsonc` binds the Worker to `mcp.imqueue.org` via a custom domain. If you
 prefer to wire the domain in the dashboard, remove the `routes` block and add a
@@ -88,3 +96,7 @@ Custom Domain under the Worker's **Settings → Domains**.
   the deploy needs its own trigger: before it was automated the hosted endpoint
   sat five releases behind npm (serving `2.0.0` while npm was on `2.0.5`),
   because `npm publish` never touched it.
+- **`prepublishOnly` does not cover this directory.** It runs `npm run build`,
+  which uses the root `tsconfig.json` and so compiles `src/` only — the Worker
+  has its own `worker/tsconfig.json`. That is why the deploy script type-checks
+  it separately instead of trusting the publish gate.
