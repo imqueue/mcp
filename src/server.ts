@@ -128,9 +128,9 @@ export function createServer(opts: { version: string; mode: Mode; cli?: CliHandl
     {
       title: "Search @imqueue documentation",
       description:
-        "Search the official @imqueue docs (guides, tutorial, CLI manual, API reference, articles) and return the most relevant pages with their URLs. Use this first when asked how to do something in @imqueue, then get_doc to read a page in full.",
+        "Search the official @imqueue docs (guides, tutorial, CLI manual, articles) and every exported symbol of the current @imqueue/core and @imqueue/rpc majors, returning the most relevant pages with their URLs. Takes a plain question or an exact symbol name such as 'RedisQueue.send' or 'watcherCheckDelay'. Use this first when asked how to do something in @imqueue, or to confirm a signature before writing code against it, then get_doc to read a page in full.",
       inputSchema: {
-        query: z.string().describe("What you want to find, e.g. 'expose a service method' or 'delayed jobs'"),
+        query: z.string().describe("A question or a symbol name, e.g. 'expose a service method', 'delayed jobs' or 'IMQOptions.safeDelivery'"),
         limit: z.number().int().min(1).max(20).optional().describe("Max results (default 6)"),
       },
     },

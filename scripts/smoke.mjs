@@ -66,6 +66,23 @@ try {
     console.log(`${t.includes("imqueue.org") ? "✅" : "⚠️ "} search_docs (live docs) ${t.includes("imqueue.org") ? "" : "— no network / docs unreachable"}`);
   } catch { console.log("⚠️  search_docs skipped (no network)"); }
 
+  // Symbol lookup needs /api/search-index.json, which only exists once the site
+  // has deployed it — a miss is a warning, so this stays useful offline too.
+  try {
+    const sym = await rpc(7, "tools/call", { name: "search_docs", arguments: { query: "RedisQueue.send", limit: 3 } });
+    const t = sym.result?.content?.[0]?.text ?? "";
+    const hit = t.includes("/api/core/latest/core.redisqueue.send/");
+    console.log(`${hit ? "✅" : "⚠️ "} search_docs (API symbols)${hit ? "" : " — /api/search-index.json not reachable"}`);
+  } catch { console.log("⚠️  search_docs (API symbols) skipped (no network)"); }
+
+  // get_doc must reach the markdown mirror of a generated API page.
+  try {
+    const doc = await rpc(8, "tools/call", { name: "get_doc", arguments: { url: "https://imqueue.org/api/core/latest/core.redisqueue.send/" } });
+    const t = doc.result?.content?.[0]?.text ?? "";
+    const hit = t.includes("RedisQueue.send") && t.includes("**Signature:**");
+    console.log(`${hit ? "✅" : "⚠️ "} get_doc (API reference)${hit ? "" : " — API markdown mirror unreachable"}`);
+  } catch { console.log("⚠️  get_doc (API reference) skipped (no network)"); }
+
   console.log(failures ? `\n${failures} offline check(s) FAILED` : "\nAll offline checks passed");
 } finally {
   proc.kill();
