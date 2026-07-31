@@ -17,6 +17,7 @@ export const PACKAGES: PkgInfo[] = [
   { name: "@imqueue/validation", install: "npm i @imqueue/validation", summary: "Zod-backed field- and method-level validation via native TC39 decorators (@validate/@validatable/@validated). Selectable via --packages validation." },
   { name: "@imqueue/pg-pubsub", install: "npm i @imqueue/pg-pubsub", summary: "Reliable PostgreSQL LISTEN/NOTIFY with inter-process lock support." },
   { name: "@imqueue/pg-cache", install: "npm i @imqueue/pg-cache", summary: "PostgreSQL-managed cache on Redis for @imqueue service methods." },
+  { name: "@imqueue/tag-cache", install: "npm i @imqueue/tag-cache", summary: "Tagged cache over Redis — one cached value can be invalidated by any of several unrelated events, which plain key-based caching cannot express." },
   { name: "@imqueue/async-logger", install: "npm i @imqueue/async-logger", summary: "Configurable async logger over winston for @imqueue services." },
   { name: "@imqueue/http-protect", install: "npm i @imqueue/http-protect", summary: "HTTP DDoS-protection middleware." },
 ];
