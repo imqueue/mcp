@@ -128,7 +128,13 @@ export function createServer(opts: { version: string; mode: Mode; cli?: CliHandl
     {
       title: "Search @imqueue documentation",
       description:
-        "Search the official @imqueue docs (guides, tutorial, CLI manual, articles) and every exported symbol of the current @imqueue/core and @imqueue/rpc majors, returning the most relevant pages with their URLs. Takes a plain question or an exact symbol name such as 'RedisQueue.send' or 'watcherCheckDelay'. Use this first when asked how to do something in @imqueue, or to confirm a signature before writing code against it, then get_doc to read a page in full.",
+        // Do NOT name the covered packages here. The symbol index is fetched from
+        // /api/search-index.json at runtime, so it grows whenever another package's
+        // reference is published — this description said "@imqueue/core and
+        // @imqueue/rpc" while the index already carried pg-pubsub, pg-cache and
+        // tag-cache, which is worse than saying nothing: an agent reading it has no
+        // reason to search for a symbol that is in fact indexed.
+        "Search the official @imqueue docs (guides, tutorial, CLI manual, articles) and every exported symbol of every @imqueue package that publishes a generated API reference, returning the most relevant pages with their URLs. Each result names the package it belongs to. Takes a plain question or an exact symbol name such as 'RedisQueue.send', 'PgPubSub.listen' or 'watcherCheckDelay'. Use this first when asked how to do something in @imqueue, or to confirm a signature before writing code against it, then get_doc to read a page in full.",
       inputSchema: {
         query: z.string().describe("A question or a symbol name, e.g. 'expose a service method', 'delayed jobs' or 'IMQOptions.safeDelivery'"),
         limit: z.number().int().min(1).max(20).optional().describe("Max results (default 6)"),
