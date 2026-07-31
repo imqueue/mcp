@@ -1,6 +1,15 @@
-// Static catalog of the main @imqueue packages, so an agent can pick the right
-// one before scaffolding. Kept deliberately short — the full ecosystem lives on
-// imqueue.org and is reachable via search_docs.
+// Static catalog of the @imqueue packages, so an agent can pick the right one
+// before scaffolding.
+//
+// This lists EVERY published package, not a curated subset. It used to be
+// deliberately short, on the grounds that the rest was reachable via
+// search_docs — but an agent cannot search for a package it has no reason to
+// believe exists, so anything missing here was effectively invisible. Keep it in
+// step with scripts/lib/api-packages.js in the imqueue.com repo, which is the
+// other place the full set is enumerated.
+//
+// Ordered by what an agent reaches for first — the spine and the CLI, then the
+// capability packages grouped the way imqueue.org/api/ groups them.
 
 export interface PkgInfo {
   name: string;
@@ -18,7 +27,13 @@ export const PACKAGES: PkgInfo[] = [
   { name: "@imqueue/pg-pubsub", install: "npm i @imqueue/pg-pubsub", summary: "Reliable PostgreSQL LISTEN/NOTIFY with inter-process lock support." },
   { name: "@imqueue/pg-cache", install: "npm i @imqueue/pg-cache", summary: "PostgreSQL-managed cache on Redis for @imqueue service methods." },
   { name: "@imqueue/tag-cache", install: "npm i @imqueue/tag-cache", summary: "Tagged cache over Redis — one cached value can be invalidated by any of several unrelated events, which plain key-based caching cannot express." },
-  { name: "@imqueue/async-logger", install: "npm i @imqueue/async-logger", summary: "Configurable async logger over winston for @imqueue services." },
+  { name: "@imqueue/sequelize", install: "npm i @imqueue/sequelize", summary: "Sequelize ORM refinements for @imqueue services." },
+  { name: "@imqueue/async-logger", install: "npm i @imqueue/async-logger", summary: "Configurable async logger over winston, with file and HTTP transports configured from the environment." },
+  { name: "@imqueue/opentelemetry-instrumentation-imqueue", install: "npm i @imqueue/opentelemetry-instrumentation-imqueue", summary: "OpenTelemetry instrumentation for @imqueue/rpc — register it once at start-up and every RPC produces a linked client and server span, with no changes to service or client code. Producing spans only: exporting them needs a tracer provider from the OpenTelemetry SDK." },
+  { name: "@imqueue/dd-trace", install: "npm i @imqueue/dd-trace", summary: "Datadog APM tracing for @imqueue/rpc — a drop-in dd-trace replacement that traces every RPC. Use this or the OpenTelemetry instrumentation, not both." },
+  { name: "@imqueue/graphql-dependency", install: "npm i @imqueue/graphql-dependency", summary: "Declarative cross-service dependency loading for GraphQL — describe how your types relate once, at start-up, and nested data arrives in bulk instead of one service call per resolved object. This is the answer to N+1 across services." },
+  { name: "@imqueue/type-graphql-dependency", install: "npm i @imqueue/type-graphql-dependency", summary: "The same dependency loading for type-graphql — relations declared with a decorator on your existing classes rather than on raw GraphQLObjectType values. Layers on top of @imqueue/graphql-dependency." },
+  { name: "@imqueue/net", install: "npm i @imqueue/net", summary: "Fast binary network address checker with full IPv4 and IPv6 support." },
   { name: "@imqueue/http-protect", install: "npm i @imqueue/http-protect", summary: "HTTP DDoS-protection middleware." },
 ];
 
