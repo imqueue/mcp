@@ -52,7 +52,20 @@ try {
   check("scaffold_service (offline)", svcText.includes("class UserService extends IMQService") && svcText.includes("@expose()"));
 
   const pkgs = await rpc(4, "tools/call", { name: "list_packages", arguments: {} });
-  check("list_packages (offline)", (pkgs.result?.content?.[0]?.text ?? "").includes("@imqueue/rpc"));
+  const pkgText = pkgs.result?.content?.[0]?.text ?? "";
+  check("list_packages (offline)", pkgText.includes("@imqueue/rpc"));
+
+  // Renamed packages, asserted both ways. The catalog is compiled into the
+  // tarball and into the Worker bundle, so a stale entry here is what an agent
+  // acts on — it would install a deprecated package and get a working build,
+  // which is invisible until someone notices the version never moves. The
+  // negative assertions are the ones that matter: a half-applied rename that
+  // fixed `name` and left `install` alone would otherwise ship green.
+  const renamed = [["@imqueue/opentelemetry", "@imqueue/opentelemetry-instrumentation-imqueue"], ["@imqueue/pg-sequelize", "@imqueue/sequelize"], ["@imqueue/datadog", "@imqueue/dd-trace"]];
+  for (const [current, retired] of renamed) {
+    check(`list_packages offers ${ current }`, pkgText.includes(`npm i ${ current }`));
+    check(`list_packages does not offer ${ retired }`, !pkgText.includes(`npm i ${ retired }`));
+  }
 
   // cli_status must degrade gracefully whether or not `imq` is installed.
   const cli = await rpc(6, "tools/call", { name: "cli_status", arguments: {} });
