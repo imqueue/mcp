@@ -21,8 +21,14 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import { searchDocs, getDoc } from "./docs.js";
-import { renderPackages } from "./packages.js";
-import { scaffoldService, scaffoldClient, type MethodSpec } from "./scaffold.js";
+import { renderPackages, PACKAGES } from "./packages.js";
+import {
+  scaffoldService,
+  scaffoldClient,
+  renderService,
+  renderClient,
+  type MethodSpec,
+} from "./scaffold.js";
 
 export type Mode = "local" | "remote";
 
@@ -64,6 +70,20 @@ export interface CliHandlers {
 }
 
 const text = (t: string) => ({ content: [{ type: "text" as const, text: t }] });
+
+/**
+ * A result with both faces: the markdown a human reads, and the same answer as
+ * data for a client that would rather not parse prose.
+ *
+ * Every tool that declares an `outputSchema` must return `structuredContent`
+ * matching it, and both are sent — dropping the text would regress any client
+ * that only renders `content`.
+ */
+const both = <T>(t: string, data: T) => ({
+  content: [{ type: "text" as const, text: t }],
+  structuredContent: data as Record<string, unknown>,
+});
+
 const fail = (e: unknown) => ({
   content: [{ type: "text" as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }],
   isError: true,
@@ -131,16 +151,34 @@ const methodSchema = z
   })
   .strict();
 
-/** How to install the full local server — the payload of local_install_guide. */
+/**
+ * How to install the full local server, as data — the structuredContent of
+ * local_install_guide. A client can write `clientConfig` straight into an MCP
+ * config file rather than lifting it out of a code fence.
+ */
+export const LOCAL_INSTALL_CONFIG = {
+  claudeCodeCommand: "claude mcp add imqueue -- npx -y @imqueue/mcp",
+  clientConfig: {
+    mcpServers: {
+      imqueue: { command: "npx", args: ["-y", "@imqueue/mcp"] },
+    },
+  },
+};
+
+/**
+ * The human-facing version of the same thing. RENDERED from the config above so
+ * the instructions and the machine-readable config cannot drift apart — the last
+ * thing this tool should do is print one command and return another.
+ */
 export const LOCAL_INSTALL = [
   "Install the full @imqueue MCP server locally — it runs via `npx`, no build step:",
   "",
   "• Claude Code:",
-  "    `claude mcp add imqueue -- npx -y @imqueue/mcp`",
+  `    \`${LOCAL_INSTALL_CONFIG.claudeCodeCommand}\``,
   "",
   "• Cursor / Cline / Windsurf / other clients — add to your MCP config:",
   "```json",
-  '{ "mcpServers": { "imqueue": { "command": "npx", "args": ["-y", "@imqueue/mcp"] } } }',
+  JSON.stringify(LOCAL_INSTALL_CONFIG.clientConfig),
   "```",
 ].join("\n");
 
@@ -165,13 +203,52 @@ function registerSharedTools(server: McpServer): void {
         query: z.string().describe("A question or a symbol name, e.g. 'expose a service method', 'delayed jobs' or 'IMQOptions.safeDelivery'"),
         limit: z.number().int().min(1).max(20).optional().describe("Max results (default 6)"),
       },
+      // Structured results are the point of this tool: a client should be able to
+      // take `results[0].url` and hand it to get_doc without regexing the prose.
+      outputSchema: {
+        query: z.string().describe("The query that was searched"),
+        count: z.number().int().describe("Number of results returned (0 means no matches)"),
+        results: z
+          .array(
+            z.object({
+              title: z.string(),
+              section: z.string().describe("Where it sits in the docs, e.g. 'Guides' or 'API · @imqueue/core property'"),
+              description: z.string(),
+              url: z.string().describe("Pass this to get_doc to read the page in full"),
+              symbol: z.boolean().optional().describe("True for a generated API-reference page rather than prose"),
+            }),
+          )
+          .describe("Most relevant first"),
+      },
     },
     async ({ query, limit }) => {
       try {
         const hits = await searchDocs(query, limit ?? 6);
-        if (!hits.length) return text(`No matches for "${query}". Try broader terms or call list_packages.`);
+        const results = hits.map((h) => ({
+          title: h.title,
+          section: h.section,
+          description: h.description,
+          url: h.url,
+          ...(h.symbol ? { symbol: true } : {}),
+        }));
+
+        // A miss is still a successful call with an empty result set — the text
+        // says so in words, the structure says so with count: 0.
+        if (!hits.length) {
+          return both(`No matches for "${query}". Try broader terms or call list_packages.`, {
+            query,
+            count: 0,
+            results,
+          });
+        }
+
         const body = hits.map((h) => `### ${h.title}  _(${h.section})_\n${h.description}\n${h.url}`).join("\n\n");
-        return text(`${hits.length} result(s) for "${query}":\n\n${body}\n\nRead any page in full with get_doc(url).`);
+
+        return both(`${hits.length} result(s) for "${query}":\n\n${body}\n\nRead any page in full with get_doc(url).`, {
+          query,
+          count: results.length,
+          results,
+        });
       } catch (e) {
         return fail(e);
       }
@@ -187,11 +264,18 @@ function registerSharedTools(server: McpServer): void {
       inputSchema: {
         url: z.string().describe("An imqueue.org page URL, e.g. https://imqueue.org/get-started/"),
       },
+      // `url` is the resolved markdown-mirror URL, which is not always the URL
+      // that was passed in — separating it from the body saves a client parsing
+      // the "Source:" line back off the front of the text.
+      outputSchema: {
+        url: z.string().describe("The markdown mirror actually fetched"),
+        markdown: z.string().describe("The page body as plain markdown"),
+      },
     },
     async ({ url }) => {
       try {
         const doc = await getDoc(url);
-        return text(`Source: ${doc.url}\n\n${doc.markdown}`);
+        return both(`Source: ${doc.url}\n\n${doc.markdown}`, doc);
       } catch (e) {
         return fail(e);
       }
@@ -205,10 +289,25 @@ function registerSharedTools(server: McpServer): void {
       description:
         "Return the main @imqueue packages with a one-line summary and install command, so you can pick the right one.",
       inputSchema: {},
+      outputSchema: {
+        packages: z
+          .array(
+            z.object({
+              name: z.string(),
+              install: z.string().describe("The exact install command, including -g where the package is a CLI"),
+              summary: z.string(),
+              pick: z
+                .string()
+                .optional()
+                .describe("Present only where two packages cover similar ground: the rule for choosing between them"),
+            }),
+          )
+          .describe("Ordered by what to reach for first"),
+      },
     },
     async () => {
       try {
-        return text(renderPackages());
+        return both(renderPackages(), { packages: PACKAGES });
       } catch (e) {
         return fail(e);
       }
@@ -225,10 +324,25 @@ function registerSharedTools(server: McpServer): void {
         name: z.string().describe("Service name, e.g. 'user' or 'UserService'"),
         methods: z.array(methodSchema).optional().describe("Methods to expose"),
       },
+      // Files come out as a list with paths, so a client can write them directly
+      // instead of splitting code fences out of the markdown and guessing names.
+      outputSchema: {
+        service: z.string().describe("Class name used, after normalisation ('user' -> 'UserService')"),
+        install: z.string(),
+        files: z.array(
+          z.object({
+            path: z.string(),
+            language: z.string(),
+            content: z.string(),
+          }),
+        ),
+        cliAlternative: z.string().describe("The CLI command that creates a full provider-wired project instead"),
+      },
     },
     async ({ name, methods }) => {
       try {
-        return text(scaffoldService(name, methods as MethodSpec[] | undefined));
+        const scaffold = scaffoldService(name, methods as MethodSpec[] | undefined);
+        return both(renderService(scaffold), scaffold);
       } catch (e) {
         return fail(e);
       }
@@ -245,10 +359,23 @@ function registerSharedTools(server: McpServer): void {
         service: z.string().describe("The service to call, e.g. 'user' or 'UserService'"),
         methods: z.array(methodSchema).optional().describe("Known methods (used to shape the example call)"),
       },
+      // `example` rather than `files`: the real client comes from
+      // generateCommand, and calling this `files` would invite a client to save a
+      // snippet whose types can drift away from the service.
+      outputSchema: {
+        service: z.string(),
+        client: z.string().describe("Generated client class name"),
+        generateCommand: z.string().describe("Run against the RUNNING service to emit the real typed client"),
+        output: z.string().describe("Where that command writes the client"),
+        example: z
+          .object({ language: z.string(), content: z.string() })
+          .describe("An illustrative call — not a file to write"),
+      },
     },
     async ({ service, methods }) => {
       try {
-        return text(scaffoldClient(service, methods as MethodSpec[] | undefined));
+        const scaffold = scaffoldClient(service, methods as MethodSpec[] | undefined);
+        return both(renderClient(scaffold), scaffold);
       } catch (e) {
         return fail(e);
       }
@@ -459,8 +586,18 @@ function registerInstallGuide(server: McpServer): void {
       description:
         "Return the setup instructions for running the full @imqueue MCP server on your own machine. The local server adds the CLI-backed tools, which act on your project files and running services and so cannot be offered by a hosted server. Returns instructions only — it installs nothing.",
       inputSchema: {},
+      outputSchema: {
+        claudeCodeCommand: z.string().describe("One-liner for Claude Code"),
+        clientConfig: z
+          .object({
+            mcpServers: z.object({
+              imqueue: z.object({ command: z.string(), args: z.array(z.string()) }),
+            }),
+          })
+          .describe("Drop into an MCP config file as-is. VS Code and Visual Studio use `servers` with type:'stdio' instead of `mcpServers`."),
+      },
     },
-    async () => text(LOCAL_INSTALL),
+    async () => both(LOCAL_INSTALL, LOCAL_INSTALL_CONFIG),
   );
 }
 

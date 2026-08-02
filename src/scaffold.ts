@@ -15,6 +15,47 @@ export interface MethodSpec {
   returns?: string; // TypeScript return type (without the Promise<> wrapper)
 }
 
+/** One generated source file: what to call it, and what goes in it. */
+export interface ScaffoldFile {
+  path: string;
+  language: string;
+  content: string;
+}
+
+/**
+ * What `scaffoldService` produces, as data.
+ *
+ * The tools declare an `outputSchema` and return this as `structuredContent`, so
+ * a client can write the files straight out instead of parsing code fences from a
+ * markdown blob. The markdown a human reads is RENDERED FROM THIS by
+ * `renderService` — one source, so the prose and the structure cannot disagree
+ * about what the generated code is.
+ */
+export interface ServiceScaffold {
+  /** Class name actually used, after normalisation (`user` -> `UserService`). */
+  service: string;
+  install: string;
+  files: ScaffoldFile[];
+  /** The CLI command that does this for real, provider-wired. */
+  cliAlternative: string;
+}
+
+/** What `scaffoldClient` produces, as data. See {@link ServiceScaffold}. */
+export interface ClientScaffold {
+  service: string;
+  client: string;
+  /** Run this against the RUNNING service to emit the real typed client. */
+  generateCommand: string;
+  /** Where that command writes the generated client. */
+  output: string;
+  /**
+   * An illustrative call, NOT a file to write. Deliberately not called `files`:
+   * the real client comes from `generateCommand`, and naming this `files` would
+   * invite a client to save a snippet whose types can drift from the service.
+   */
+  example: { language: string; content: string };
+}
+
 function pascal(s: string): string {
   return s
     .replace(/[^a-zA-Z0-9]+/g, " ")
@@ -63,8 +104,8 @@ function renderMethod(m: MethodSpec): string {
   return `${jsdoc}\n    @expose()\n    public async ${m.name}(${sig}): Promise<${ret}> {\n${body}\n    }`;
 }
 
-/** Generate an @imqueue/rpc service class + a bootstrap that starts it. */
-export function scaffoldService(name: string, methods?: MethodSpec[]): string {
+/** Generate an @imqueue/rpc service class + a bootstrap that starts it, as data. */
+export function scaffoldService(name: string, methods?: MethodSpec[]): ServiceScaffold {
   const cls = pascal(name).endsWith("Service") ? pascal(name) : `${pascal(name)}Service`;
   const list = methods && methods.length ? methods : DEFAULT_METHODS;
   const body = list.map(renderMethod).join("\n\n");
@@ -90,25 +131,31 @@ ${body}
 })();
 `;
 
+  return {
+    service: cls,
+    install: "npm i @imqueue/rpc",
+    files: [
+      { path: `${cls}.ts`, language: "typescript", content: service.trimEnd() },
+      { path: "index.ts", language: "typescript", content: bootstrap.trimEnd() },
+    ],
+    cliAlternative: `imq service create ${name}`,
+  };
+}
+
+/** Render a {@link ServiceScaffold} as the markdown a human reads. */
+export function renderService(s: ServiceScaffold): string {
+  const label = (f: ScaffoldFile) => (f.path === "index.ts" ? `**${f.path}** (bootstrap)` : `**${f.path}**`);
+
   return [
-    `Install: \`npm i @imqueue/rpc\` (needs a running Redis).`,
+    `Install: \`${s.install}\` (needs a running Redis).`,
+    ...s.files.flatMap((f) => ["", label(f), "```" + f.language, f.content, "```"]),
     "",
-    `**${cls}.ts**`,
-    "```typescript",
-    service.trimEnd(),
-    "```",
-    "",
-    `**index.ts** (bootstrap)`,
-    "```typescript",
-    bootstrap.trimEnd(),
-    "```",
-    "",
-    `Tip: scaffold a full, provider-wired project (VCS/CI/Docker) with the CLI instead: \`imq service create ${name}\`.`,
+    `Tip: scaffold a full, provider-wired project (VCS/CI/Docker) with the CLI instead: \`${s.cliAlternative}\`.`,
   ].join("\n");
 }
 
-/** Generate a typed-client usage snippet for a service. */
-export function scaffoldClient(service: string, methods?: MethodSpec[]): string {
+/** Generate a typed-client usage snippet for a service, as data. */
+export function scaffoldClient(service: string, methods?: MethodSpec[]): ClientScaffold {
   const cls = pascal(service).endsWith("Service") ? pascal(service) : `${pascal(service)}Service`;
   const clientCls = cls.replace(/Service$/, "Client");
   const sample = (methods && methods[0]) || DEFAULT_METHODS[0];
@@ -126,17 +173,28 @@ export function scaffoldClient(service: string, methods?: MethodSpec[]): string 
 })();
 `;
 
+  return {
+    service: cls,
+    client: clientCls,
+    generateCommand: `imq client generate ${cls.replace(/Service$/, "")}`,
+    output: `./clients/${clientCls}`,
+    example: { language: "typescript", content: usage.trimEnd() },
+  };
+}
+
+/** Render a {@link ClientScaffold} as the markdown a human reads. */
+export function renderClient(c: ClientScaffold): string {
   return [
     `@imqueue generates the **real**, fully-typed client from a **running** service, so its types can never drift:`,
     "",
     "```bash",
-    `# with ${cls} running:`,
-    `imq client generate ${cls.replace(/Service$/, "")}`,
+    `# with ${c.service} running:`,
+    c.generateCommand,
     "```",
     "",
-    `That emits \`./clients/${clientCls}\`. Use it like:`,
-    "```typescript",
-    usage.trimEnd(),
+    `That emits \`${c.output}\`. Use it like:`,
+    "```" + c.example.language,
+    c.example.content,
     "```",
     "",
     `The snippet above is illustrative — prefer the generated client so method signatures stay in sync with the service.`,

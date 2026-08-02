@@ -96,13 +96,51 @@ try {
   ];
   check("openWorldHint matches behaviour", wrongOpen.length === 0, wrongOpen.join(", "));
 
+  // The six shared tools declare an outputSchema so clients can consume results as
+  // data. The CLI-backed tools deliberately do not: they return `imq` stdout,
+  // which has no shape worth promising.
+  const WITH_SCHEMA = ["search_docs", "get_doc", "list_packages", "scaffold_service", "scaffold_client"];
+  const missingSchema = WITH_SCHEMA.filter((n) => !tools.find((t) => t.name === n)?.outputSchema);
+  check("shared tools declare an outputSchema", missingSchema.length === 0, missingSchema.join(", "));
+
+  const CLI_TOOLS = ["cli_status", "cli_help", "cli_install", "create_service", "generate_client", "fleet", "config", "logs"];
+  const unexpectedSchema = CLI_TOOLS.filter((n) => tools.find((t) => t.name === n)?.outputSchema);
+  check("CLI tools stay unstructured", unexpectedSchema.length === 0, unexpectedSchema.join(", "));
+
   const svc = await rpc(3, "tools/call", { name: "scaffold_service", arguments: { name: "user", methods: [{ name: "getUser", description: "Fetch a user by id", params: [{ name: "id", type: "number" }], returns: "User" }] } });
   const svcText = svc.result?.content?.[0]?.text ?? "";
   check("scaffold_service (offline)", svcText.includes("class UserService extends IMQService") && svcText.includes("@expose()"));
 
+  // A tool with an outputSchema MUST return structuredContent, and it has to say
+  // the same thing the prose does — the whole point of rendering the markdown from
+  // the structure is that the two cannot drift.
+  const svcData = svc.result?.structuredContent;
+  check(
+    "scaffold_service returns structuredContent",
+    svcData?.service === "UserService" && Array.isArray(svcData?.files) && svcData.files.length === 2,
+    svcData ? `service=${svcData.service} files=${svcData.files?.length}` : "absent",
+  );
+  const svcFile = svcData?.files?.find((f) => f.path === "UserService.ts");
+  check(
+    "structured files carry paths and real content",
+    !!svcFile && svcFile.content.includes("@expose()") && svcData.files.some((f) => f.path === "index.ts"),
+    svcData?.files?.map((f) => f.path).join(", "),
+  );
+  check(
+    "text and structure agree",
+    !!svcFile && svcText.includes(svcFile.content) && svcText.includes(svcData.cliAlternative),
+  );
+
   const pkgs = await rpc(4, "tools/call", { name: "list_packages", arguments: {} });
   const pkgText = pkgs.result?.content?.[0]?.text ?? "";
   check("list_packages (offline)", pkgText.includes("@imqueue/rpc"));
+
+  const pkgData = pkgs.result?.structuredContent;
+  check(
+    "list_packages returns structuredContent",
+    Array.isArray(pkgData?.packages) && pkgData.packages.length > 10 && pkgData.packages.every((p) => p.name && p.install && p.summary),
+    `${pkgData?.packages?.length ?? 0} package(s)`,
+  );
 
   // Renamed packages, asserted both ways. The catalog is compiled into the
   // tarball and into the Worker bundle, so a stale entry here is what an agent

@@ -77,6 +77,12 @@ try {
   const noOpenWorld = tools.filter((t) => typeof t.annotations?.openWorldHint !== "boolean").map((t) => t.name);
   check("every hosted tool declares openWorldHint", noOpenWorld.length === 0, noOpenWorld.join(", "));
 
+  // All six hosted tools promise structured output. This is what stops the
+  // "outputSchema recommended" hint in the directories, and more usefully it lets
+  // a client chain search_docs -> get_doc on data instead of on parsed prose.
+  const noSchema = tools.filter((t) => !t.outputSchema).map((t) => t.name);
+  check("every hosted tool declares an outputSchema", noSchema.length === 0, noSchema.join(", "));
+
   // A tool that cannot run has no business being listed — call each one and
   // require a usable answer, which is also what both directories test.
   const calls = [
@@ -92,6 +98,21 @@ try {
     const r = await rpc("tools/call", { name, arguments: args });
     const t = r?.content?.[0]?.text ?? "";
     check(`${name} returns a usable response`, !r?.isError && assert(t), t.split("\n")[0]?.slice(0, 80));
+    // Declaring an outputSchema and then not returning structuredContent is worse
+    // than declaring nothing: a client that trusts the schema gets undefined.
+    check(`${name} returns structuredContent`, !!r?.structuredContent && typeof r.structuredContent === "object");
+  }
+
+  // The chain the schemas exist to make possible: take a URL out of search_docs'
+  // structured results and feed it to get_doc, with no text parsing anywhere.
+  const found = await rpc("tools/call", { name: "search_docs", arguments: { query: "expose a service method", limit: 3 } });
+  const firstUrl = found?.structuredContent?.results?.[0]?.url;
+  check("search_docs structured results carry a usable url", typeof firstUrl === "string" && firstUrl.startsWith("https://imqueue.org"), String(firstUrl));
+
+  if (firstUrl) {
+    const chained = await rpc("tools/call", { name: "get_doc", arguments: { url: firstUrl } });
+    const md = chained?.structuredContent?.markdown;
+    check("get_doc consumes that url and returns structured markdown", typeof md === "string" && md.length > 0, `${(md ?? "").length} chars`);
   }
 
   // Invalid input must produce an actionable message rather than a bare stack or a

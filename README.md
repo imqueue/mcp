@@ -22,6 +22,8 @@ Two surfaces, and they are not the same. The **local** server (`npx -y @imqueue/
 
 All five are read-only: they fetch or generate text and write nothing.
 
+They also declare an MCP **`outputSchema`** and return `structuredContent` alongside the human-readable markdown, so a client can consume results as data — take `results[0].url` from `search_docs` and hand it to `get_doc`, or write `scaffold_service`'s `files[]` straight to disk — instead of parsing prose and code fences. The markdown is *rendered from* that same structure, so the two can't drift. The CLI-backed tools deliberately have no schema: they return `imq` stdout, which has no shape worth promising.
+
 ### CLI-backed tools — local only (require `@imqueue/cli` on PATH)
 
 These drive the **real** CLI, so they act on the machine the server runs on. They exist in the local install only; the hosted server does not register them.
