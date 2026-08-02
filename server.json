@@ -7,25 +7,29 @@
     "url": "https://github.com/imqueue/mcp",
     "source": "github"
   },
-  "version": "3.0.0",
+  "version": "2.3.0",
   "websiteUrl": "https://imqueue.org/mcp/",
   "icons": [
     {
       "src": "https://imqueue.org/images/imqueue-icon-512.png",
       "mimeType": "image/png",
-      "sizes": ["512x512"]
+      "sizes": [
+        "512x512"
+      ]
     },
     {
       "src": "https://imqueue.org/images/imqueue-icon-1024.png",
       "mimeType": "image/png",
-      "sizes": ["1024x1024"]
+      "sizes": [
+        "1024x1024"
+      ]
     }
   ],
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@imqueue/mcp",
-      "version": "3.0.0",
+      "version": "2.3.0",
       "transport": {
         "type": "stdio"
       }
