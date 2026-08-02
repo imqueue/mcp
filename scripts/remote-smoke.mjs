@@ -132,6 +132,28 @@ try {
     );
   }
 
+  // The hosted server answers chat clients, so the query shape that matters is a
+  // whole spoken question, not keywords. ChatGPT drops this server's results and
+  // web-searches instead when they look off-topic, so ranking is part of the
+  // listed contract, not a nicety.
+  const asked = await rpc("tools/call", {
+    name: "search_docs",
+    arguments: { query: "How do I expose a method on an @imqueue service?", limit: 5 },
+  });
+  const ranked = asked?.structuredContent?.results ?? [];
+  check(
+    "a question ranks the page that answers it first",
+    /\/api\/rpc\/latest\/rpc\.expose\/|\/tutorial\//.test(ranked[0]?.url ?? ""),
+    ranked[0]?.url ?? "no results",
+  );
+  const firstBlog = ranked.findIndex((r) => r.url.includes("/blog/"));
+  const lastDoc = ranked.reduce((m, r, i) => (r.url.includes("/blog/") ? m : i), -1);
+  check(
+    "no blog post outranks a doc page",
+    firstBlog === -1 || firstBlog > lastDoc,
+    ranked.map((r) => r.url.replace("https://imqueue.org", "")).join(" | "),
+  );
+
   // Invalid input must produce an actionable message rather than a bare stack or a
   // generic failure — a reviewer checks this explicitly.
   const refused = await rpc("tools/call", { name: "get_doc", arguments: { url: "https://example.com/" } });

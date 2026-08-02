@@ -185,6 +185,37 @@ try {
     console.log(`${hit ? "✅" : "⚠️ "} search_docs (API symbols)${hit ? "" : " — /api/search-index.json not reachable"}`);
   } catch { console.log("⚠️  search_docs (API symbols) skipped (no network)"); }
 
+  // Ranking, for a natural-language question — the shape a chat user actually
+  // types. Two ways this used to fail, both invisible without an assertion: term
+  // weighting that pays `imqueue` and `service` (in nearly every title, so worth
+  // nothing) the same as `expose`, and long blog posts outscoring the pages
+  // written to answer the question. A client that gets three comparison essays
+  // concludes this server cannot help and falls back to a web search.
+  try {
+    const q = "How do I expose a method on an @imqueue service?";
+    const nl = await rpc(9, "tools/call", { name: "search_docs", arguments: { query: q, limit: 5 } });
+    const results = nl.result?.structuredContent?.results ?? [];
+
+    if (!results.length) {
+      console.log("⚠️  search_docs (question ranking) skipped (no network)");
+    } else {
+      check(
+        "a question ranks the page that answers it first",
+        /\/api\/rpc\/latest\/rpc\.expose\/|\/tutorial\//.test(results[0].url),
+        results[0].url,
+      );
+      // Docs before blog whenever the docs cover the question. Not "no blog posts":
+      // a post may still appear, only never above a doc page that matched.
+      const firstBlog = results.findIndex((r) => r.url.includes("/blog/"));
+      const lastDoc = results.reduce((m, r, i) => (r.url.includes("/blog/") ? m : i), -1);
+      check(
+        "no blog post outranks a doc page",
+        firstBlog === -1 || firstBlog > lastDoc,
+        results.map((r) => r.url.replace("https://imqueue.org", "")).join(" | "),
+      );
+    }
+  } catch { console.log("⚠️  search_docs (question ranking) skipped (no network)"); }
+
   // get_doc must reach the markdown mirror of a generated API page.
   try {
     const doc = await rpc(8, "tools/call", { name: "get_doc", arguments: { url: "https://imqueue.org/api/core/latest/core.redisqueue.send/" } });
