@@ -77,14 +77,20 @@ try {
   const noOpenWorld = tools.filter((t) => typeof t.annotations?.openWorldHint !== "boolean").map((t) => t.name);
   check("every hosted tool declares openWorldHint", noOpenWorld.length === 0, noOpenWorld.join(", "));
 
-  // Five of the six promise structured output, which is what lets a client chain
-  // search_docs -> get_doc on data rather than on parsed prose. get_doc is the
-  // deliberate exception: a schema there would force it to send the page body
-  // twice (see the comment on the tool in src/server.ts).
-  const SCHEMA_EXEMPT = ["get_doc"];
-  const noSchema = tools.filter((t) => !t.outputSchema && !SCHEMA_EXEMPT.includes(t.name)).map((t) => t.name);
-  check("every hosted tool except get_doc declares an outputSchema", noSchema.length === 0, noSchema.join(", "));
-  check("get_doc stays schema-free (no duplicated page body)", !tools.find((t) => t.name === "get_doc")?.outputSchema);
+  // All six promise structured output, which is what lets a client chain
+  // search_docs -> get_doc on data rather than on parsed prose, and what clears the
+  // "output schema recommended" hint in the directories.
+  const noSchema = tools.filter((t) => !t.outputSchema).map((t) => t.name);
+  check("every hosted tool declares an outputSchema", noSchema.length === 0, noSchema.join(", "));
+
+  // get_doc's schema is metadata only. A body field here means the page is being
+  // shipped twice — the one duplication that actually costs the caller context.
+  const docProps = Object.keys(tools.find((t) => t.name === "get_doc")?.outputSchema?.properties ?? {});
+  check(
+    "get_doc schema carries metadata, never the page body",
+    !docProps.some((k) => ["markdown", "content", "text", "body"].includes(k)),
+    docProps.join(", "),
+  );
 
   // A tool that cannot run has no business being listed — call each one and
   // require a usable answer, which is also what both directories test.
@@ -102,13 +108,8 @@ try {
     const t = r?.content?.[0]?.text ?? "";
     check(`${name} returns a usable response`, !r?.isError && assert(t), t.split("\n")[0]?.slice(0, 80));
     // Declaring an outputSchema and then not returning structuredContent is worse
-    // than declaring nothing: a client that trusts the schema gets undefined. The
-    // converse matters too — get_doc must NOT start sending a second copy.
-    if (SCHEMA_EXEMPT.includes(name)) {
-      check(`${name} sends no structuredContent`, !r?.structuredContent);
-    } else {
-      check(`${name} returns structuredContent`, !!r?.structuredContent && typeof r.structuredContent === "object");
-    }
+    // than declaring nothing: a client that trusts the schema gets undefined.
+    check(`${name} returns structuredContent`, !!r?.structuredContent && typeof r.structuredContent === "object");
   }
 
   // The chain the schemas exist to make possible: take a URL out of search_docs'
@@ -120,7 +121,15 @@ try {
   if (firstUrl) {
     const chained = await rpc("tools/call", { name: "get_doc", arguments: { url: firstUrl } });
     const md = chained?.content?.[0]?.text ?? "";
-    check("get_doc consumes that url and returns the page once", md.includes(firstUrl) && md.length > 0, `${md.length} chars, single copy`);
+    const meta = chained?.structuredContent ?? {};
+    check("get_doc consumes that url and returns the page", md.includes(firstUrl) && md.length > 0, `${md.length} chars`);
+    // The page must appear exactly once across both fields.
+    const structuredBytes = JSON.stringify(meta).length;
+    check(
+      "the page is not duplicated into structuredContent",
+      structuredBytes < 400 && typeof meta.bytes === "number" && meta.bytes > 0,
+      `metadata ${structuredBytes} B, reports bytes=${meta.bytes}`,
+    );
   }
 
   // Invalid input must produce an actionable message rather than a bare stack or a

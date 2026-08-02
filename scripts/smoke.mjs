@@ -96,17 +96,22 @@ try {
   ];
   check("openWorldHint matches behaviour", wrongOpen.length === 0, wrongOpen.join(", "));
 
-  // Tools whose structure makes something possible that parsing prose does not
-  // declare an outputSchema, so clients can consume results as data.
-  const WITH_SCHEMA = ["search_docs", "list_packages", "scaffold_service", "scaffold_client"];
+  // Every shared tool declares an outputSchema so clients can consume results as
+  // data. The CLI-backed tools deliberately do not: they return `imq` stdout,
+  // which has no shape worth promising.
+  const WITH_SCHEMA = ["search_docs", "get_doc", "list_packages", "scaffold_service", "scaffold_client"];
   const missingSchema = WITH_SCHEMA.filter((n) => !tools.find((t) => t.name === n)?.outputSchema);
   check("shared tools declare an outputSchema", missingSchema.length === 0, missingSchema.join(", "));
 
-  // get_doc is the deliberate exception. A schema forces structuredContent, and
-  // its structuredContent could only repeat the page body — 16.6 kB twice on a
-  // large API page. Asserted so a future "every tool should have a schema" tidy-up
-  // has to read the reasoning in server.ts before undoing it.
-  check("get_doc stays schema-free (no duplicated page body)", !tools.find((t) => t.name === "get_doc")?.outputSchema);
+  // get_doc's schema is METADATA ONLY. If a `markdown`/`content`/`text` field ever
+  // appears in it, the page is being sent twice again — 33 kB to read one page.
+  const docSchemaProps = Object.keys(tools.find((t) => t.name === "get_doc")?.outputSchema?.properties ?? {});
+  const bodyFields = docSchemaProps.filter((k) => ["markdown", "content", "text", "body"].includes(k));
+  check(
+    "get_doc schema carries metadata, never the page body",
+    bodyFields.length === 0 && docSchemaProps.includes("url"),
+    docSchemaProps.join(", "),
+  );
 
   const CLI_TOOLS = ["cli_status", "cli_help", "cli_install", "create_service", "generate_client", "fleet", "config", "logs"];
   const unexpectedSchema = CLI_TOOLS.filter((n) => tools.find((t) => t.name === n)?.outputSchema);

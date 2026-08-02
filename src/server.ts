@@ -264,30 +264,41 @@ function registerSharedTools(server: McpServer): void {
       inputSchema: {
         url: z.string().describe("An imqueue.org page URL, e.g. https://imqueue.org/get-started/"),
       },
-      // DELIBERATELY NO outputSchema, unlike every other shared tool.
+      // METADATA ONLY — the page body is deliberately NOT in here.
       //
-      // A schema obliges the server to send `structuredContent`, and the SDK
-      // throws without it — but dropping `content` in exchange would leave any
-      // client that renders only text with nothing. So a schema here means
-      // sending the page body TWICE. Measured on /api/rpc/latest/: 16.6 kB of
-      // content plus 16.6 kB of structuredContent, 33 kB for one page read. This
-      // is the one tool whose payload IS its content, so it is the one place
-      // where that doubling actually costs the caller context.
+      // A schema obliges the server to send `structuredContent` (the SDK throws
+      // without it), but nothing says structuredContent must repeat what is in
+      // `content`. It describes the structured PART of the answer. So the page
+      // travels once, in `content`, and this box carries only the facts a caller
+      // would otherwise have to parse back out of the text or guess at.
       //
-      // And it buys nothing. The only fields a schema could add are `url` — which
-      // the caller passed in, differing only by the resolved /index.md suffix —
-      // and `markdown`, which is the text verbatim. Structure earns its keep when
-      // it makes something possible that parsing prose does not (see search_docs,
-      // whose `results[].url` is chainable). Here it would be pure restatement.
+      // Putting `markdown` in here as well would have doubled the largest
+      // response the server can produce: measured on /api/rpc/latest/, 16.6 kB of
+      // text plus 16.6 kB of structure, 33 kB to read one page. There is no field
+      // below that costs more than a few dozen bytes, and no client has to read
+      // the body twice to get it.
       //
-      // The cost is one advisory "output schema recommended" hint in the client
-      // UIs. That is the right trade: a hint, versus doubling the largest
-      // response the server can produce.
+      // Note the absence of a body field is self-describing: a caller reading this
+      // schema sees url/mimeType/bytes and no content field, so it knows the page
+      // itself is in `content`. Which is where every client already looks.
+      outputSchema: {
+        url: z.string().describe("The markdown mirror actually fetched — not always the URL passed in, which is why it is worth returning"),
+        mimeType: z.string().describe("Media type of the page body carried in content"),
+        bytes: z.number().int().describe("Size of the page body, so a caller can decide before reading it"),
+      },
     },
     async ({ url }) => {
       try {
         const doc = await getDoc(url);
-        return text(`Source: ${doc.url}\n\n${doc.markdown}`);
+
+        return {
+          content: [{ type: "text" as const, text: `Source: ${doc.url}\n\n${doc.markdown}` }],
+          structuredContent: {
+            url: doc.url,
+            mimeType: "text/markdown",
+            bytes: doc.markdown.length,
+          },
+        };
       } catch (e) {
         return fail(e);
       }
