@@ -1,6 +1,9 @@
 // Minimal MCP stdio smoke test: spawn the built server, do the JSON-RPC
 // handshake, list tools, then call search_docs and scaffold_service.
 // Usage: node scripts/smoke.mjs
+//
+// This covers the LOCAL surface only. The hosted one is a different tool list and
+// has its own check — scripts/remote-smoke.mjs.
 import { spawn } from "node:child_process";
 
 const proc = spawn("node", ["dist/index.js"], { stdio: ["pipe", "pipe", "inherit"] });
@@ -43,9 +46,55 @@ try {
   send({ jsonrpc: "2.0", method: "notifications/initialized" });
 
   const list = await rpc(2, "tools/list", {});
-  const names = (list.result?.tools ?? []).map((t) => t.name).sort();
+  const tools = list.result?.tools ?? [];
+  const names = tools.map((t) => t.name).sort();
   const expected = ["cli_help", "cli_install", "cli_status", "config", "create_service", "fleet", "generate_client", "get_doc", "list_packages", "logs", "scaffold_client", "scaffold_service", "search_docs"];
   check("tools/list", JSON.stringify(names) === JSON.stringify(expected), names.join(", "));
+
+  // local_install_guide exists only on the hosted server: locally the CLI tools it
+  // points at are already here, so advertising it would be noise.
+  check("local_install_guide is remote-only", !names.includes("local_install_guide"));
+
+  // Annotations are a directory-submission requirement (both OpenAI's app directory
+  // and the Anthropic Connectors Directory) and clients use readOnlyHint to decide
+  // what may run without prompting. A tool registered without them is a silent
+  // regression: it works, so nothing else catches it.
+  const noTitle = tools.filter((t) => !t.title && !t.annotations?.title).map((t) => t.name);
+  check("every tool has a title", noTitle.length === 0, noTitle.join(", "));
+
+  const HINTS = ["readOnlyHint", "destructiveHint", "openWorldHint"];
+  const badHints = tools
+    .filter((t) => HINTS.some((h) => typeof t.annotations?.[h] !== "boolean"))
+    .map((t) => t.name);
+  check("every tool has all three behaviour hints", badHints.length === 0, badHints.join(", "));
+
+  // The hints must match what the tool does. Spot-check the ones whose value is a
+  // judgement call rather than a default, so a careless edit that flips them fails
+  // here instead of at review.
+  const hint = (name, h) => tools.find((t) => t.name === name)?.annotations?.[h];
+  const readOnly = ["search_docs", "get_doc", "list_packages", "scaffold_service", "scaffold_client", "cli_status", "cli_help"];
+  const notReadOnly = ["create_service", "generate_client", "cli_install", "fleet", "config", "logs"];
+  const wrongRead = [
+    ...readOnly.filter((n) => hint(n, "readOnlyHint") !== true),
+    ...notReadOnly.filter((n) => hint(n, "readOnlyHint") !== false),
+  ];
+  check("readOnlyHint matches behaviour", wrongRead.length === 0, wrongRead.join(", "));
+
+  // Mixed-action tools must own their worst case: one destructive action makes the
+  // whole tool destructive.
+  const destructive = ["cli_install", "fleet", "config", "logs"];
+  const wrongDestructive = destructive.filter((n) => hint(n, "destructiveHint") !== true);
+  check("destructive tools declare destructiveHint", wrongDestructive.length === 0, wrongDestructive.join(", "));
+
+  // The live-docs tools read a site that changes between calls; the scaffolders and
+  // the catalogue compute from the build and must not claim otherwise.
+  const openWorld = ["search_docs", "get_doc"];
+  const closedWorld = ["list_packages", "scaffold_service", "scaffold_client"];
+  const wrongOpen = [
+    ...openWorld.filter((n) => hint(n, "openWorldHint") !== true),
+    ...closedWorld.filter((n) => hint(n, "openWorldHint") !== false),
+  ];
+  check("openWorldHint matches behaviour", wrongOpen.length === 0, wrongOpen.join(", "));
 
   const svc = await rpc(3, "tools/call", { name: "scaffold_service", arguments: { name: "user", methods: [{ name: "getUser", description: "Fetch a user by id", params: [{ name: "id", type: "number" }], returns: "User" }] } });
   const svcText = svc.result?.content?.[0]?.text ?? "";

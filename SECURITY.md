@@ -35,9 +35,30 @@ release before reporting.
 
 ## Note on this server
 
-`@imqueue/mcp` runs locally over stdio and only ever fetches `imqueue.org` for
-documentation. It has no hosted endpoint and collects no telemetry. See the
-[safety model](https://imqueue.org/mcp/security/) for the full trust boundary.
+`@imqueue/mcp` ships in two forms, with deliberately different reach.
+
+**Local (`npx -y @imqueue/mcp`, stdio).** Runs on your machine under your user
+account. It fetches `imqueue.org` for documentation and nothing else — every
+outbound URL is checked against that host before the request is made. The
+CLI-backed tools (`create_service`, `generate_client`, `cli_install`, `fleet`,
+`config`, `logs`) shell out to the `imq` binary and therefore act on your files,
+your processes and your CLI configuration. `create_service` is a dry run unless
+you pass `apply: true`. The server itself collects no telemetry and phones home
+nowhere.
+
+**Hosted (`https://mcp.imqueue.org/mcp`).** A Cloudflare Worker serving six
+**read-only** tools: `search_docs`, `get_doc`, `list_packages`,
+`scaffold_service`, `scaffold_client` and `local_install_guide`. The CLI-backed
+tools are not registered on it — a hosted server cannot reach your machine, so it
+does not advertise tools that would act on one. There are no accounts, no
+authentication and no persistence: each request builds a fresh, stateless server
+and the only data it handles is the arguments you send (a search query, a doc URL,
+a service name). Cloudflare records Worker invocation logs for the endpoint, which
+is disclosed in the [privacy policy](https://imqueue.org/privacy/); the server
+adds no analytics or tracking of its own.
+
+See the [safety model](https://imqueue.org/mcp/security/) for the full trust
+boundary.
 
 ## Scope
 

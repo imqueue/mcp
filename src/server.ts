@@ -1,14 +1,22 @@
 // Shared @imqueue MCP server factory. Every tool is registered here once and the
 // server runs in one of two modes:
 //
-//   * "local"  — runs on the developer's machine (stdio entry: index.ts). The
-//                CLI-backed tools drive the real `imq` binary. Their handlers are
-//                INJECTED via `cli` so this module never imports node:child_process
-//                (keeps the remote/edge bundle clean).
-//   * "remote" — hosted over HTTP (worker/worker.ts, e.g. mcp.imqueue.org). Docs
-//                search + scaffolding work fully; the CLI/fleet tools can't touch
-//                the user's machine, so they return a "run me locally" hand-off —
-//                and, where it makes sense, the equivalent offline scaffold inline.
+//   * "local"  — runs on the developer's machine (stdio entry: index.ts). Serves
+//                the shared docs/scaffold tools PLUS the CLI-backed tools, which
+//                drive the real `imq` binary. Their handlers are INJECTED via
+//                `cli` so this module never imports node:child_process (keeps the
+//                remote/edge bundle clean).
+//   * "remote" — hosted over HTTP (worker/worker.ts, e.g. mcp.imqueue.org). Serves
+//                the shared tools plus a setup guide. The CLI-backed tools are NOT
+//                REGISTERED here: a hosted server cannot reach the caller's machine,
+//                so offering them would advertise a capability it does not have.
+//
+// Registration is gated by mode rather than the handlers branching on it, which is
+// what keeps the hosted surface honest: every tool it lists it can actually run,
+// and all of them are read-only. Both directories (OpenAI's app directory and the
+// Anthropic Connectors Directory) check that a tool's name, description and
+// annotations match its real behaviour, and Anthropic rejects outright any single
+// tool that spans safe and unsafe operations. See worker/README.md.
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
@@ -61,6 +69,42 @@ const fail = (e: unknown) => ({
   isError: true,
 });
 
+/**
+ * What a tool does to the world it runs in:
+ *
+ *   read        — computes or fetches; changes nothing.
+ *   write       — creates or modifies something, but does not damage what is there.
+ *   destructive — at least ONE of the operations it accepts overwrites, deletes or
+ *                 stops something. The hint describes the tool's worst case, not
+ *                 its typical one, so a mixed-action tool is `destructive`.
+ */
+type ToolKind = "read" | "write" | "destructive";
+
+/**
+ * Tool metadata: a human-facing title plus the behaviour hints.
+ *
+ * `title` is emitted BOTH at the top level (current spec) and inside `annotations`
+ * (where older clients look), so every client shows a real name.
+ *
+ * The hints are not decoration — clients use `readOnlyHint` to decide what may run
+ * without asking the user, and both public directories require all three to be
+ * present AND to match observable behaviour. Understating is the dangerous
+ * direction: it reads as mislabelling.
+ *
+ * `openWorld` means the tool touches something outside this process whose state is
+ * not ours — a public website, the npm registry, a running service. Reading a
+ * catalogue compiled into the build is NOT open-world; fetching a page from
+ * imqueue.org is, because the page can change between two identical calls.
+ */
+function meta(title: string, kind: ToolKind, openWorld: boolean) {
+  const hints = {
+    readOnlyHint: kind === "read",
+    destructiveHint: kind === "destructive",
+    openWorldHint: openWorld,
+  };
+  return { title, annotations: { title, ...hints } };
+}
+
 const methodSchema = z
   .object({
     name: z.string().describe("Method name"),
@@ -87,7 +131,7 @@ const methodSchema = z
   })
   .strict();
 
-/** How to install the full local server — surfaced by the remote hand-off + install_locally. */
+/** How to install the full local server — the payload of local_install_guide. */
 export const LOCAL_INSTALL = [
   "Install the full @imqueue MCP server locally — it runs via `npx`, no build step:",
   "",
@@ -100,33 +144,15 @@ export const LOCAL_INSTALL = [
   "```",
 ].join("\n");
 
-/** Build a "this tool is local-only on the hosted server" response, optionally with an inline offline equivalent. */
-const handoff = (tool: string, why: string, offlineEquivalent?: string) =>
-  text(
-    `\`${tool}\` runs on **your machine** ${why}, so it isn't available on the hosted (\`mcp.imqueue.org\`) server.\n\n` +
-      LOCAL_INSTALL +
-      (offlineEquivalent
-        ? `\n\n---\n\nMeanwhile, here's an offline equivalent you can use right now:\n\n${offlineEquivalent}`
-        : ""),
-  );
-
 /**
- * Create a fully-configured @imqueue MCP server.
- * @param version  Version string to report (kept in sync with package.json by the caller).
- * @param mode     "local" (full) or "remote" (docs+scaffold, CLI tools hand off to local).
- * @param cli      CLI-backed handlers; required for the real tools in local mode.
+ * Docs search, package catalogue and offline scaffolding. Identical in both modes,
+ * and read-only throughout — nothing here writes a file or runs a process.
  */
-export function createServer(opts: { version: string; mode: Mode; cli?: CliHandlers }): McpServer {
-  const { version, mode, cli } = opts;
-  const server = new McpServer({ name: "imqueue", version });
-  const local = mode === "local" && !!cli;
-
-  // --- Stateless tools: identical in both modes ----------------------------
-
+function registerSharedTools(server: McpServer): void {
   server.registerTool(
     "search_docs",
     {
-      title: "Search @imqueue documentation",
+      ...meta("Search @imqueue documentation", "read", true), // reads live pages from imqueue.org
       description:
         // Do NOT name the covered packages here. The symbol index is fetched from
         // /api/search-index.json at runtime, so it grows whenever another package's
@@ -134,7 +160,7 @@ export function createServer(opts: { version: string; mode: Mode; cli?: CliHandl
         // @imqueue/rpc" while the index already carried pg-pubsub, pg-cache and
         // tag-cache, which is worse than saying nothing: an agent reading it has no
         // reason to search for a symbol that is in fact indexed.
-        "Search the official @imqueue docs (guides, tutorial, CLI manual, articles) and every exported symbol of every @imqueue package that publishes a generated API reference, returning the most relevant pages with their URLs. Each result names the package it belongs to. Takes a plain question or an exact symbol name such as 'RedisQueue.send', 'PgPubSub.listen' or 'watcherCheckDelay'. Use this first when asked how to do something in @imqueue, or to confirm a signature before writing code against it, then get_doc to read a page in full.",
+        "Search the official @imqueue docs (guides, tutorial, CLI manual, articles) and every exported symbol of every @imqueue package that publishes a generated API reference, returning the most relevant pages with their URLs. Each result names the package it belongs to. Takes a plain question or an exact symbol name such as 'RedisQueue.send', 'PgPubSub.listen' or 'watcherCheckDelay'. Answers 'how do I do X in @imqueue' and confirms a signature before code is written against it. Every result carries the page URL, which get_doc reads in full.",
       inputSchema: {
         query: z.string().describe("A question or a symbol name, e.g. 'expose a service method', 'delayed jobs' or 'IMQOptions.safeDelivery'"),
         limit: z.number().int().min(1).max(20).optional().describe("Max results (default 6)"),
@@ -155,9 +181,9 @@ export function createServer(opts: { version: string; mode: Mode; cli?: CliHandl
   server.registerTool(
     "get_doc",
     {
-      title: "Read an @imqueue doc page",
+      ...meta("Read an @imqueue doc page", "read", true), // fetches a live page from imqueue.org (host-locked)
       description:
-        "Fetch the full markdown of an @imqueue documentation page by its URL (as returned by search_docs). Returns plain markdown suitable for reading and quoting.",
+        "Fetch the full markdown of an @imqueue documentation page by its URL (as returned by search_docs). Returns plain markdown suitable for reading and quoting. Only imqueue.org URLs are fetched; anything else is refused.",
       inputSchema: {
         url: z.string().describe("An imqueue.org page URL, e.g. https://imqueue.org/get-started/"),
       },
@@ -175,7 +201,7 @@ export function createServer(opts: { version: string; mode: Mode; cli?: CliHandl
   server.registerTool(
     "list_packages",
     {
-      title: "List @imqueue packages",
+      ...meta("List @imqueue packages", "read", false), // renders a catalogue compiled into the build
       description:
         "Return the main @imqueue packages with a one-line summary and install command, so you can pick the right one.",
       inputSchema: {},
@@ -192,9 +218,9 @@ export function createServer(opts: { version: string; mode: Mode; cli?: CliHandl
   server.registerTool(
     "scaffold_service",
     {
-      title: "Scaffold an @imqueue service",
+      ...meta("Scaffold an @imqueue service", "read", false), // returns generated source text; writes nothing
       description:
-        "Generate an idiomatic @imqueue/rpc service (an IMQService subclass with @expose()d, JSDoc-typed methods) plus a bootstrap that starts it. Provide the methods you want, or omit them for a starter template.",
+        "Generate an idiomatic @imqueue/rpc service (an IMQService subclass with @expose()d, JSDoc-typed methods) plus a bootstrap that starts it. Provide the methods you want, or omit them for a starter template. Returns source text only — it writes no files.",
       inputSchema: {
         name: z.string().describe("Service name, e.g. 'user' or 'UserService'"),
         methods: z.array(methodSchema).optional().describe("Methods to expose"),
@@ -212,9 +238,9 @@ export function createServer(opts: { version: string; mode: Mode; cli?: CliHandl
   server.registerTool(
     "scaffold_client",
     {
-      title: "Scaffold an @imqueue typed client",
+      ...meta("Scaffold an @imqueue typed client", "read", false), // returns generated source text; writes nothing
       description:
-        "Show how to generate and use the fully-typed client for an @imqueue service. @imqueue generates the real client from a running service (via `imq client generate`), so this returns that command plus an illustrative usage snippet.",
+        "Show how to generate and use the fully-typed client for an @imqueue service. @imqueue generates the real client from a running service (via `imq client generate`), so this returns that command plus an illustrative usage snippet. Returns text only — it writes no files.",
       inputSchema: {
         service: z.string().describe("The service to call, e.g. 'user' or 'UserService'"),
         methods: z.array(methodSchema).optional().describe("Known methods (used to shape the example call)"),
@@ -228,59 +254,59 @@ export function createServer(opts: { version: string; mode: Mode; cli?: CliHandl
       }
     },
   );
+}
 
-  // --- CLI-backed tools ------------------------------------------------------
-  // In local mode they drive the real `imq`. In remote mode each returns a
-  // hand-off to the local install (with an inline scaffold where one exists).
-
+/**
+ * The CLI-backed tools — LOCAL MODE ONLY. Every one of these acts on the machine
+ * the server runs on: its `imq` binary, its project files, its service processes,
+ * its logs. That is exactly why they are not registered on the hosted server.
+ */
+function registerCliTools(server: McpServer, cli: CliHandlers): void {
   server.registerTool(
     "cli_status",
     {
-      title: "Check the @imqueue CLI",
+      ...meta("Check the @imqueue CLI", "read", false), // inspects a local binary
       description:
-        "Detect whether the `imq` CLI (@imqueue/cli) is installed locally and report its version. Call this before create_service/generate_client; if it's missing, fall back to scaffold_service/scaffold_client.",
+        "Detect whether the `imq` CLI (@imqueue/cli) is installed on this machine and report its version. create_service and generate_client need it; the scaffold_service and scaffold_client tools do not.",
       inputSchema: {},
     },
     async () => {
-      if (local) {
-        try {
-          return text(await cli!.cliStatus());
-        } catch (e) {
-          return fail(e);
-        }
+      try {
+        return text(await cli.cliStatus());
+      } catch (e) {
+        return fail(e);
       }
-      return handoff("cli_status", "(it inspects the `imq` binary installed on your machine)");
     },
   );
 
   server.registerTool(
     "cli_help",
     {
-      title: "Show @imqueue CLI help",
+      ...meta("Show @imqueue CLI help", "read", false), // shells out to a local binary, read-only
       description:
-        "Run `imq [command] --help` and return the exact, version-accurate flags for a command (e.g. 'service create', 'client generate'). Use this to discover the flags to pass to create_service. No side effects.",
+        "Run `imq [command] --help` and return the exact, version-accurate flags for a command (e.g. 'service create', 'client generate'). The flags it lists are the ones create_service accepts. Read-only: it prints help and exits.",
       inputSchema: {
         command: z.string().optional().describe("A subcommand, e.g. 'service create' (omit for top-level help)"),
       },
     },
     async ({ command }) => {
-      if (local) {
-        try {
-          return text(await cli!.cliHelp(command));
-        } catch (e) {
-          return fail(e);
-        }
+      try {
+        return text(await cli.cliHelp(command));
+      } catch (e) {
+        return fail(e);
       }
-      return handoff("cli_help", "(it shells out to your local `imq` for version-accurate flags)");
     },
   );
 
   server.registerTool(
     "create_service",
     {
-      title: "Create an @imqueue service with the CLI",
+      // Not "destructive" — it creates a new project rather than damaging an
+      // existing one — but it is open-world, because apply=true can configure a
+      // VCS remote and push to it.
+      ...meta("Create an @imqueue service with the CLI", "write", true),
       description:
-        "Scaffold a real, provider-wired @imqueue service via `imq service create`. Runs as a DRY-RUN by default (shows the plan, writes nothing). Set apply=true to actually create it — that writes files and may init git / configure CI / push to a remote, so only apply with the user's intent. Pass CLI flags (see cli_help) to avoid interactive prompts. Requires `imq` (see cli_status). On the hosted server this returns an offline scaffold instead.",
+        "Scaffold a real, provider-wired @imqueue service via `imq service create`. Runs as a DRY-RUN by default: it shows the plan and writes nothing. With apply=true it writes files into the target directory and may initialise git, configure CI and push to a remote. Accepts `imq` flags (cli_help lists them) to avoid interactive prompts. Requires the `imq` CLI.",
       inputSchema: {
         name: z.string().describe("Service name, e.g. 'user'"),
         path: z.string().optional().describe("Target directory (optional)"),
@@ -295,27 +321,20 @@ export function createServer(opts: { version: string; mode: Mode; cli?: CliHandl
       },
     },
     async ({ name, path, flags, cwd, apply }) => {
-      if (local) {
-        try {
-          return text(await cli!.createService({ name, path, flags, cwd, apply }));
-        } catch (e) {
-          return fail(e);
-        }
+      try {
+        return text(await cli.createService({ name, path, flags, cwd, apply }));
+      } catch (e) {
+        return fail(e);
       }
-      return handoff(
-        "create_service",
-        "(it writes files into your project and can init git / configure CI / push to a remote)",
-        scaffoldService(name),
-      );
     },
   );
 
   server.registerTool(
     "generate_client",
     {
-      title: "Generate a typed client with the CLI",
+      ...meta("Generate a typed client with the CLI", "write", true), // introspects a live service over its queue
       description:
-        "Run `imq client generate <Service>` to emit the real, fully-typed client. The target service must be RUNNING (the CLI introspects the live service). Requires `imq` (see cli_status). On the hosted server this returns an offline client snippet instead.",
+        "Run `imq client generate <Service>` to emit the real, fully-typed client, writing it into the output directory. The target service must be RUNNING — the CLI introspects the live service over its message queue. Requires the `imq` CLI.",
       inputSchema: {
         service: z.string().describe("Service name to generate a client for, e.g. 'User' / 'UserService'"),
         path: z.string().optional().describe("Output directory (optional)"),
@@ -323,49 +342,43 @@ export function createServer(opts: { version: string; mode: Mode; cli?: CliHandl
       },
     },
     async ({ service, path, cwd }) => {
-      if (local) {
-        try {
-          return text(await cli!.generateClient(service, path, cwd));
-        } catch (e) {
-          return fail(e);
-        }
+      try {
+        return text(await cli.generateClient(service, path, cwd));
+      } catch (e) {
+        return fail(e);
       }
-      return handoff(
-        "generate_client",
-        "(it introspects a service running on your machine to emit the real typed client)",
-        scaffoldClient(service),
-      );
     },
   );
 
   server.registerTool(
     "cli_install",
     {
-      title: "Install the @imqueue CLI",
+      // Destructive: a global install replaces whatever `imq` is already there.
+      // Open-world: it downloads from the npm registry.
+      ...meta("Install the @imqueue CLI", "destructive", true),
       description:
-        "Install @imqueue/cli globally via `npm install -g @imqueue/cli`. Use when cli_status reports it's missing. A global install may require a user-writable npm prefix or elevated permissions.",
+        "Install @imqueue/cli globally via `npm install -g @imqueue/cli`, replacing any `imq` already installed. cli_status reports whether it is already present. A global install may require a user-writable npm prefix or elevated permissions.",
       inputSchema: {
         version: z.string().optional().describe("npm version/tag to install (default 'latest')"),
       },
     },
     async ({ version: v }) => {
-      if (local) {
-        try {
-          return text(await cli!.installCli(v));
-        } catch (e) {
-          return fail(e);
-        }
+      try {
+        return text(await cli.installCli(v));
+      } catch (e) {
+        return fail(e);
       }
-      return handoff("cli_install", "(it installs the `imq` binary onto your machine with npm)");
     },
   );
 
   server.registerTool(
     "fleet",
     {
-      title: "Control the local @imqueue services fleet",
+      // `status` is read-only but `stop`/`restart` kill running processes, and the
+      // hint describes the worst case the tool accepts.
+      ...meta("Control the local @imqueue services fleet", "destructive", false),
       description:
-        "Run `imq ctl <action>` over a directory of service repositories. `status` is read-only; `start`/`stop`/`restart` change running processes. Requires `imq` (see cli_status).",
+        "Run `imq ctl <action>` over a directory of service repositories. `status` reports what is running and changes nothing; `start`, `stop` and `restart` change which processes are running on this machine. Requires the `imq` CLI.",
       inputSchema: {
         action: z.enum(["start", "stop", "restart", "status"]).describe("What to do to the fleet"),
         path: z.string().optional().describe("Directory containing the service repositories (default '.')"),
@@ -377,23 +390,21 @@ export function createServer(opts: { version: string; mode: Mode; cli?: CliHandl
       },
     },
     async ({ action, path, services, update, calm, verbose, cwd }) => {
-      if (local) {
-        try {
-          return text(await cli!.fleet({ action, path, services, update, calm, verbose, cwd }));
-        } catch (e) {
-          return fail(e);
-        }
+      try {
+        return text(await cli.fleet({ action, path, services, update, calm, verbose, cwd }));
+      } catch (e) {
+        return fail(e);
       }
-      return handoff("fleet", "(it starts/stops and inspects @imqueue service processes running on your machine)");
     },
   );
 
   server.registerTool(
     "config",
     {
-      title: "Manage @imqueue CLI configuration",
+      // `set` overwrites an existing value; `init` rewrites the file.
+      ...meta("Manage @imqueue CLI configuration", "destructive", false),
       description:
-        "Run `imq config <action>`. `check` = is config initialized; `get [option]` = read a value (or list all); `set option value` = write a value (nested keys use a dot-path, e.g. 'ci.provider'); `init` = interactive setup (prefer `set` for automation — `init` will time out non-interactively). Requires `imq` (see cli_status).",
+        "Run `imq config <action>`. `check` = is config initialized; `get [option]` = read a value (or list all); `set option value` = overwrite a value (nested keys use a dot-path, e.g. 'ci.provider'); `init` = interactive setup, which will time out when run non-interactively, so `set` is the automatable one. Requires the `imq` CLI.",
       inputSchema: {
         action: z.enum(["check", "get", "set", "init"]).describe("Config operation"),
         option: z.string().optional().describe("Config key (dot-path for nested), for get/set"),
@@ -402,23 +413,21 @@ export function createServer(opts: { version: string; mode: Mode; cli?: CliHandl
       },
     },
     async ({ action, option, value, cwd }) => {
-      if (local) {
-        try {
-          return text(await cli!.config({ action, option, value, cwd }));
-        } catch (e) {
-          return fail(e);
-        }
+      try {
+        return text(await cli.config({ action, option, value, cwd }));
+      } catch (e) {
+        return fail(e);
       }
-      return handoff("config", "(it reads/writes the `imq` CLI configuration on your machine)");
     },
   );
 
   server.registerTool(
     "logs",
     {
-      title: "Read or clean @imqueue fleet logs",
+      // `clean` deletes the collected logs.
+      ...meta("Read or clean @imqueue fleet logs", "destructive", false),
       description:
-        "Work with logs of services started by `imq ctl`. action='dump' (default) returns the current combined logs and exits — it never follows/streams, and output is capped. action='clean' deletes collected logs. Requires `imq` (see cli_status).",
+        "Work with logs of services started by `imq ctl`. action='dump' (default) returns the current combined logs and exits — it never follows/streams, and output is capped. action='clean' deletes the collected log files. Requires the `imq` CLI.",
       inputSchema: {
         action: z.enum(["dump", "clean"]).optional().describe("dump = read current logs (default); clean = delete collected logs"),
         services: z.string().optional().describe("Comma-separated service names; omit to combine all"),
@@ -427,30 +436,54 @@ export function createServer(opts: { version: string; mode: Mode; cli?: CliHandl
       },
     },
     async ({ action, services, prefix, cwd }) => {
-      if (local) {
-        try {
-          return text(await cli!.logs({ action, services, prefix, cwd }));
-        } catch (e) {
-          return fail(e);
-        }
+      try {
+        return text(await cli.logs({ action, services, prefix, cwd }));
+      } catch (e) {
+        return fail(e);
       }
-      return handoff("logs", "(it reads logs of @imqueue services running on your machine)");
     },
   );
+}
 
-  // --- Remote-only helper ----------------------------------------------------
-  // A discoverable "how do I get the full thing" tool on the hosted server.
-  if (!local) {
-    server.registerTool(
-      "install_locally",
-      {
-        title: "Install the full @imqueue MCP locally",
-        description:
-          "Return the exact steps to install the full @imqueue MCP server on your machine (needed for the CLI/fleet tools, which act on your local project and services). The hosted server covers docs search and scaffolding; everything else runs locally.",
-        inputSchema: {},
-      },
-      async () => text(LOCAL_INSTALL),
-    );
+/**
+ * Remote-only. The hosted server does not offer the CLI-backed tools, so it needs
+ * a discoverable answer to "how do I get the ones that act on my machine?".
+ * Returns instructions — it installs nothing, which is why it is not called
+ * `install_locally`.
+ */
+function registerInstallGuide(server: McpServer): void {
+  server.registerTool(
+    "local_install_guide",
+    {
+      ...meta("How to install the @imqueue MCP server locally", "read", false), // returns static text
+      description:
+        "Return the setup instructions for running the full @imqueue MCP server on your own machine. The local server adds the CLI-backed tools, which act on your project files and running services and so cannot be offered by a hosted server. Returns instructions only — it installs nothing.",
+      inputSchema: {},
+    },
+    async () => text(LOCAL_INSTALL),
+  );
+}
+
+/**
+ * Create a fully-configured @imqueue MCP server.
+ * @param version  Version string to report (kept in sync with package.json by the caller).
+ * @param mode     "local" (docs + scaffold + CLI tools) or "remote" (docs + scaffold + install guide).
+ * @param cli      CLI-backed handlers; required for the CLI tools to be registered at all.
+ */
+export function createServer(opts: { version: string; mode: Mode; cli?: CliHandlers }): McpServer {
+  const { version, mode, cli } = opts;
+  const server = new McpServer({ name: "imqueue", version });
+
+  registerSharedTools(server);
+
+  // `cli` is what actually makes the CLI tools work, so it — not the mode string
+  // alone — decides whether they are advertised. A "local" server built without
+  // handlers falls back to the hosted surface instead of listing tools that would
+  // throw.
+  if (mode === "local" && cli) {
+    registerCliTools(server, cli);
+  } else {
+    registerInstallGuide(server);
   }
 
   return server;

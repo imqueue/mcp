@@ -9,7 +9,7 @@ hallucinating an API. This is the GEO (Generative Engine Optimization) counterpa
 to SEO: instead of ranking in a search page, we rank **at code-time**, inside the
 tools developers already use.
 
-Three capabilities, thirteen tools:
+Three capabilities, thirteen tools locally:
 
 - **Docs access** — `search_docs`, `get_doc`, `list_packages`
 - **Offline scaffolding** — `scaffold_service`, `scaffold_client` (templates, no deps)
@@ -17,6 +17,10 @@ Three capabilities, thirteen tools:
   `generate_client`, `fleet` (`imq ctl`), `config` (`imq config`), `logs` (`imq log`)
   (drive the installed `imq` binary — install it, create projects, generate clients,
   manage the local fleet and CLI configuration)
+
+The first two capabilities are read-only and run anywhere; the CLI bridge acts on the
+machine the server runs on, so the hosted endpoint carries the first two plus a
+`local_install_guide` and nothing else — six read-only tools.
 
 ## 2. Architecture
 
@@ -31,7 +35,10 @@ AI agent (Claude Code / Cursor / …)
 ```
 
 - **Transport:** stdio (the universal local-MCP transport; works with every host
-  today). A hosted **Streamable HTTP** variant is a later option (§7).
+  today). The hosted **Streamable HTTP** variant since planned in §7 now exists at
+  `mcp.imqueue.org/mcp`; it shares this code and serves the read-only subset
+  (docs + scaffolding + a local-install guide), because the CLI-backed tools act on
+  the caller's own machine. See `worker/README.md`.
 - **Runtime:** Node ≥ 18, TypeScript, `@modelcontextprotocol/sdk` high-level
   `McpServer`, `zod` input schemas. Ships as an npm bin (`npx -y @imqueue/mcp`).
 - **Docs source:** fetched live from imqueue.org's existing machine-readable feeds
@@ -121,13 +128,18 @@ Install snippet promoted everywhere:
 ## 6. Verification
 
 `npm run smoke` spawns the built server and drives the JSON-RPC handshake:
-`initialize` → `tools/list` (asserts all five) → `tools/call` for `scaffold_service`
-and `list_packages` (offline) and `search_docs` (live). CI can run it on every push.
+`initialize` → `tools/list` (asserts the exact local tool list, plus a title and
+all three behaviour hints on every tool) → `tools/call` for `scaffold_service` and
+`list_packages` (offline) and `search_docs` (live). CI can run it on every push.
+
+`node scripts/remote-smoke.mjs [url]` does the same for the hosted endpoint, where
+the contract is stricter: the exact six-tool list and `readOnlyHint: true` on all
+of them.
 
 ## 7. Roadmap
 
-- **Streamable HTTP** deployment (a hosted endpoint) for zero-install use and for
-  hosts that prefer remote servers.
+- ~~**Streamable HTTP** deployment (a hosted endpoint) for zero-install use and for
+  hosts that prefer remote servers.~~ — shipped: `mcp.imqueue.org/mcp`.
 - **`generate_client` for real** — spin up against a reachable running service and
   return the actual generated client.
 - **Resources** — expose docs pages as MCP *resources* (not just tool results) so

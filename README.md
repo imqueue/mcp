@@ -8,6 +8,10 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server for **[@imque
 
 ## Tools
 
+Two surfaces, and they are not the same. The **local** server (`npx -y @imqueue/mcp`) has all 13 tools. The **hosted** server ([`mcp.imqueue.org/mcp`](#hosted-server-no-install)) has six, all read-only — see [below](#hosted-server-no-install) for why.
+
+### Hosted + local
+
 | Tool | What it does |
 |---|---|
 | `search_docs` | Search the official docs (guides, tutorial, CLI manual, API reference, articles) and return the most relevant pages + URLs. |
@@ -16,9 +20,11 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server for **[@imque
 | `scaffold_service` | Generate an `IMQService` subclass with `@expose()`d, JSDoc-typed methods + a bootstrap (offline, no CLI needed). |
 | `scaffold_client` | Show how to generate and use the fully-typed client for a service (offline). |
 
-### CLI-backed tools (require `@imqueue/cli` on PATH)
+All five are read-only: they fetch or generate text and write nothing.
 
-When the `imq` CLI is installed locally, these drive the **real** CLI:
+### CLI-backed tools — local only (require `@imqueue/cli` on PATH)
+
+These drive the **real** CLI, so they act on the machine the server runs on. They exist in the local install only; the hosted server does not register them.
 
 | Tool | What it does |
 |---|---|
@@ -66,14 +72,36 @@ Add to your MCP config (`.cursor/mcp.json`, `claude_desktop_config.json`, …):
 
 > **VS Code and Visual Studio** use a top-level `servers` key with `"type": "stdio"` instead of `mcpServers`. See **[imqueue.org/mcp/installation](https://imqueue.org/mcp/installation/)** for the exact config file path and snippet for every client.
 
+## Hosted server (no install)
+
+If your client supports remote MCP servers and you only need docs and scaffolding, point it at the hosted endpoint instead:
+
+```json
+{ "mcpServers": { "imqueue": { "url": "https://mcp.imqueue.org/mcp" } } }
+```
+
+It serves six tools, **all read-only**: the five above plus `local_install_guide`, which returns the setup steps for the local install.
+
+**It does not offer the CLI-backed tools, by design.** Those act on *your* machine — your project files, your running services, your CLI config — which a server running on Cloudflare's edge cannot reach. Advertising them there would mean listing tools that can never do what their names say, so they are not registered at all in remote mode. If you need them, install locally.
+
 ## Develop
 
 ```bash
 npm install
 npm run build      # tsc -> dist/
 npm run dev        # run from source with tsx
-npm run smoke      # JSON-RPC handshake + tools/list + tool calls
+npm run smoke      # local surface: handshake + tools/list + annotations + tool calls
 ```
+
+The hosted surface has its own check, because it is a different contract:
+
+```bash
+npm run dev:worker                                   # wrangler dev on :8787
+node scripts/remote-smoke.mjs http://localhost:8787/mcp
+npm run smoke:remote                                 # or against production
+```
+
+It asserts the **exact** six-tool list and that every one of them is read-only — the assertion that stops a future refactor from quietly re-exposing a CLI tool on the hosted endpoint.
 
 ## Example
 

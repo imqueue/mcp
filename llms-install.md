@@ -52,11 +52,14 @@ endpoint instead:
 }
 ```
 
-The hosted server exposes the docs and scaffolding tools over Streamable HTTP.
-The CLI-backed tools (`create_service`, `generate_client`, `fleet`, `config`,
-`logs`, …) act on the user's local machine, so they are only available with the
-**local** install above — on the hosted server they return instructions to
-install locally. Use the local install for the full tool set.
+The hosted server exposes six read-only tools over Streamable HTTP: `search_docs`,
+`get_doc`, `list_packages`, `scaffold_service`, `scaffold_client` and
+`local_install_guide`.
+
+The CLI-backed tools (`create_service`, `generate_client`, `cli_status`,
+`cli_help`, `cli_install`, `fleet`, `config`, `logs`) act on the user's local
+machine, so the hosted server does not offer them at all — they are not in its tool
+list. Use the **local** install above for the full set of thirteen.
 
 ## Verify
 

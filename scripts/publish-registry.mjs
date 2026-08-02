@@ -15,6 +15,10 @@
 //   - MCP_REGISTRY_KEY: the ed25519 private key for the imqueue.org domain
 //     namespace (org.imqueue). NEVER commit this — export it in your shell
 //     profile or a gitignored .env, and store it as a CI secret for CI runs.
+// server.json references the icons and the website by URL on imqueue.org, so those
+// have to be live before this runs — a registry record pointing at a 404 icon is
+// published, not rejected, and stays wrong until the next release.
+//
 // Optional overrides:
 //   - MCP_REGISTRY_DOMAIN       (default: imqueue.org)
 //   - MCP_REGISTRY_LOGIN_METHOD (default: dns; set "http" if the imqueue.org

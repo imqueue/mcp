@@ -1,6 +1,6 @@
 {
   "name": "@imqueue/mcp",
-  "version": "2.3.0",
+  "version": "3.0.0",
   "mcpName": "org.imqueue/mcp",
   "description": "Model Context Protocol server for @imqueue — lets AI coding agents search the docs and scaffold typed services & clients.",
   "keywords": [
@@ -39,6 +39,7 @@
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "smoke": "node scripts/smoke.mjs",
+    "smoke:remote": "node scripts/remote-smoke.mjs",
     "version": "node scripts/sync-version.mjs && git add server.json",
     "prepublishOnly": "npm run build",
     "postpublish": "node scripts/deploy-worker.mjs && node scripts/publish-registry.mjs && node scripts/publish-github-release.mjs",

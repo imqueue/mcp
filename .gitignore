@@ -11,3 +11,11 @@ dist/
 
 # Wrangler local dev state (miniflare cache/tmp) — never commit
 .wrangler/
+
+# Working notes, plans, checklists and submission drafts. This is a public repo:
+# it carries the implementation, the docs its users need and what the runtime
+# needs — not the scratch context of whoever was working on it.
+*-PLAN.md
+*-NOTES.md
+*-REPORT.md
+DIRECTORY-SUBMISSION.md

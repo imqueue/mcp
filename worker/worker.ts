@@ -1,9 +1,10 @@
 // Hosted (edge) entry for the @imqueue MCP server.
 //
 // Runs on any Web-Standard runtime — Cloudflare Workers (primary target), Deno,
-// Bun, Node 18+. It serves the remote-safe tools (docs search + scaffolding)
-// over Streamable HTTP; the CLI/fleet tools hand off to the local install
-// (see ../src/server.ts, mode: "remote"). Deploy with `wrangler deploy`.
+// Bun, Node 18+. It serves the remote-safe tools (docs search + scaffolding, plus
+// a local-install guide) over Streamable HTTP. The CLI/fleet tools are not
+// registered in remote mode at all (see ../src/server.ts). Deploy with
+// `wrangler deploy`.
 //
 // NOTE: not part of the published npm package (the main tsconfig only builds
 // src/). It is bundled independently by wrangler/esbuild. See worker/README.md.
@@ -21,12 +22,27 @@ const CORS: Record<string, string> = {
   "Access-Control-Expose-Headers": "Mcp-Session-Id",
 };
 
+/** Worker bindings. `OPENAI_APPS_CHALLENGE` is a secret, set out of band. */
+interface Env {
+  /**
+   * Domain-verification token issued by the OpenAI app-directory portal. Served
+   * verbatim from /.well-known/openai-apps-challenge. Set with
+   * `npx wrangler secret put OPENAI_APPS_CHALLENGE` — secrets survive
+   * `wrangler deploy`, so the automated postpublish deploy will not wipe it.
+   */
+  OPENAI_APPS_CHALLENGE?: string;
+}
+
 const LANDING = `@imqueue MCP server (hosted)
 
 Model Context Protocol endpoint:  POST ${"/mcp"}
 
-Docs search + scaffolding tools work here. The CLI/fleet tools run on your own
-machine — install the full server locally:
+Tools here: search_docs, get_doc, list_packages, scaffold_service,
+scaffold_client, local_install_guide. All read-only.
+
+The CLI/fleet tools act on your own machine — your project files, your running
+services — so a hosted server cannot offer them. Install the full server
+locally to get them:
 
     claude mcp add imqueue -- npx -y @imqueue/mcp
 
@@ -53,11 +69,26 @@ async function handleMcp(request: Request): Promise<Response> {
 }
 
 export default {
-  async fetch(request: Request): Promise<Response> {
+  async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: CORS });
+    }
+
+    // Domain verification for the OpenAI app directory. The portal issues a token
+    // and then fetches it back from this path on the MCP host (or a parent of it).
+    //
+    // With no secret set this is a plain 404 — the same answer as any other unknown
+    // path. It must never emit an empty 200 or the string "undefined": the portal
+    // would compare that against the real token and report a mismatch, which looks
+    // like a wrong token rather than a missing one.
+    if (request.method === "GET" && url.pathname === "/.well-known/openai-apps-challenge") {
+      const token = env?.OPENAI_APPS_CHALLENGE?.trim();
+
+      return token
+        ? new Response(token, { headers: { "content-type": "text/plain; charset=utf-8", ...CORS } })
+        : new Response("Not found", { status: 404, headers: CORS });
     }
 
     // Friendly landing page at the root for humans hitting it in a browser.
