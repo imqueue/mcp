@@ -9,7 +9,7 @@
     "search_docs, get_doc, list_packages, scaffold_service and scaffold_client are read-only — the scaffold_* tools return generated source text and write no files. The CLI-bridge tools (create_service, generate_client, cli_install, fleet, config, logs) change state on the machine the server runs on.",
     "create_service is dry-run by default — pass apply:true to actually write files.",
     "The hosted server at https://mcp.imqueue.org/mcp offers six read-only tools: search_docs, get_doc, list_packages, scaffold_service, scaffold_client and local_install_guide. The CLI-bridge tools act on the caller's own machine, so they exist only in the local (stdio) install.",
-    "Those six declare an outputSchema and return structuredContent as well as text — search_docs gives results[] with a url for get_doc, scaffold_service gives files[] with paths and content, list_packages gives packages[] with install commands. Consume the structure rather than parsing the markdown. The CLI-bridge tools return unstructured `imq` output and have no outputSchema.",
+    "search_docs, list_packages, scaffold_service and scaffold_client declare an outputSchema and return structuredContent as well as text — search_docs gives results[] with a url for get_doc, scaffold_service gives files[] with paths and content, list_packages gives packages[] with install commands. Consume the structure rather than parsing the markdown. get_doc returns text only and has no outputSchema on purpose: structuredContent there could only repeat the page body, doubling the payload. The CLI-bridge tools return unstructured `imq` output and have no outputSchema either.",
     "See the install matrix and tool reference at imqueue.org/mcp/."
   ]
 }

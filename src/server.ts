@@ -264,18 +264,30 @@ function registerSharedTools(server: McpServer): void {
       inputSchema: {
         url: z.string().describe("An imqueue.org page URL, e.g. https://imqueue.org/get-started/"),
       },
-      // `url` is the resolved markdown-mirror URL, which is not always the URL
-      // that was passed in — separating it from the body saves a client parsing
-      // the "Source:" line back off the front of the text.
-      outputSchema: {
-        url: z.string().describe("The markdown mirror actually fetched"),
-        markdown: z.string().describe("The page body as plain markdown"),
-      },
+      // DELIBERATELY NO outputSchema, unlike every other shared tool.
+      //
+      // A schema obliges the server to send `structuredContent`, and the SDK
+      // throws without it — but dropping `content` in exchange would leave any
+      // client that renders only text with nothing. So a schema here means
+      // sending the page body TWICE. Measured on /api/rpc/latest/: 16.6 kB of
+      // content plus 16.6 kB of structuredContent, 33 kB for one page read. This
+      // is the one tool whose payload IS its content, so it is the one place
+      // where that doubling actually costs the caller context.
+      //
+      // And it buys nothing. The only fields a schema could add are `url` — which
+      // the caller passed in, differing only by the resolved /index.md suffix —
+      // and `markdown`, which is the text verbatim. Structure earns its keep when
+      // it makes something possible that parsing prose does not (see search_docs,
+      // whose `results[].url` is chainable). Here it would be pure restatement.
+      //
+      // The cost is one advisory "output schema recommended" hint in the client
+      // UIs. That is the right trade: a hint, versus doubling the largest
+      // response the server can produce.
     },
     async ({ url }) => {
       try {
         const doc = await getDoc(url);
-        return both(`Source: ${doc.url}\n\n${doc.markdown}`, doc);
+        return text(`Source: ${doc.url}\n\n${doc.markdown}`);
       } catch (e) {
         return fail(e);
       }
