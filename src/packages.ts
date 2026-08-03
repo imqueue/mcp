@@ -54,6 +54,74 @@ export const PACKAGES: PkgInfo[] = [
   { name: "@imqueue/http-protect", install: "npm i @imqueue/http-protect", summary: "HTTP DDoS-protection middleware." },
 ];
 
+/**
+ * Packages that cover the same ground, where installing both breaks silently.
+ *
+ * The rule itself lives in each entry's `pick` above; this only records WHICH
+ * entries are in tension, so a search result can carry the rule with it.
+ *
+ * WHY THIS IS NEEDED. `search_docs "tracing"` returns six @imqueue/datadog symbols
+ * and no @imqueue/opentelemetry — datadog's symbols are literally named `Tracing*`,
+ * so no amount of term weighting changes that. The mitigation used to be a sentence
+ * in search_docs' description telling the caller to get the rule from
+ * list_packages, and it did not work: asked "which @imqueue package should I use for
+ * tracing?", ChatGPT answered "@imqueue/datadog" with
+ * `npm install @imqueue/datadog dd-trace` — the wrong package of the two, plus the
+ * very dependency datadog exists to replace. It never called list_packages.
+ *
+ * A mitigation that depends on the model reading prose and then choosing to make a
+ * second call is not a mitigation. So the rule now travels in the response.
+ *
+ * These two are exactly the sets `@imqueue/cli` marks `exclusive: true` in its own
+ * package catalogue (`groups.tracing` and `groups.orm` in templates/catalog.json);
+ * `groups.features` is explicitly non-exclusive. Verified against that file rather
+ * than assumed, so the server and the CLI cannot disagree about what conflicts.
+ * Note the CLI's option ids are `dd-trace` and `sequelize` — deliberately not
+ * renamed — while the npm packages below are the current names.
+ */
+export const EXCLUSIVE_PAIRS: readonly (readonly [string, string])[] = [
+  ["@imqueue/opentelemetry", "@imqueue/datadog"],
+  ["@imqueue/pg-prisma", "@imqueue/pg-sequelize"],
+];
+
+/** Does `haystack` refer to `pkg`, by full name or by its /api/ path? */
+function mentions(haystack: string, pkg: string): boolean {
+  const short = pkg.replace(/^@imqueue\//, "");
+
+  return haystack.includes(pkg) || haystack.includes(`/api/${short}/`);
+}
+
+/**
+ * Advisories for any exclusive pair the given text refers to.
+ *
+ * Rendered from `PACKAGES` rather than written out again, so the rule cannot drift
+ * from the catalogue — there is exactly one place that decides what to pick.
+ */
+export function exclusiveAdvisories(haystack: string): string[] {
+  const out: string[] = [];
+
+  for (const pair of EXCLUSIVE_PAIRS) {
+    if (!pair.some((name) => mentions(haystack, name))) continue;
+
+    const entries = pair.map((name) => {
+      const info = PACKAGES.find((p) => p.name === name);
+
+      if (!info) return `- **${name}**`;
+
+      return `- **${info.name}** — \`${info.install}\`${info.pick ? `\n  ${info.pick}` : ""}`;
+    });
+
+    out.push(
+      "⚠ These results involve two packages that cover the same ground. Pick exactly "
+        + "ONE — installing both breaks silently, and they are not additive. Picking "
+        + "NEITHER is also normal, if the service does not need this at all:\n"
+        + entries.join("\n"),
+    );
+  }
+
+  return out;
+}
+
 export function renderPackages(): string {
   // `pick` goes on its own line and is labelled, so it reads as an instruction
   // to follow rather than as more description to weigh up.

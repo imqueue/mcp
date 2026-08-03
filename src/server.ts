@@ -21,7 +21,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import { searchDocs, getDoc, suggest, setUserAgent } from "./docs.js";
-import { renderPackages, PACKAGES } from "./packages.js";
+import { renderPackages, PACKAGES, exclusiveAdvisories } from "./packages.js";
 import {
   scaffoldService,
   scaffoldClient,
@@ -309,6 +309,12 @@ function registerSharedTools(server: McpServer): void {
             }),
           )
           .describe("Most relevant first"),
+        advisories: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Present when the results involve two packages that cover the same ground. Each names both options with the rule for choosing — install exactly one, never both.",
+          ),
       },
     },
     async ({ query, limit, package: pkg }) => {
@@ -352,11 +358,24 @@ function registerSharedTools(server: McpServer): void {
 
         const body = hits.map((h) => `### ${h.title}  _(${h.section})_\n${h.description}\n${h.url}`).join("\n\n");
 
-        return both(`${hits.length} result(s) for "${query}":\n\n${body}\n\nRead any page in full with get_doc(url).`, {
-          query,
-          count: results.length,
-          results,
-        });
+        // The rule travels WITH the results, rather than in a description that asks
+        // the caller to go and make a second call. Asked "which @imqueue package
+        // should I use for tracing?", a model answered "@imqueue/datadog" with
+        // `npm install @imqueue/datadog dd-trace` — the wrong one of the two, plus
+        // the dependency datadog exists to replace — because all six results were
+        // datadog symbols and nothing in the response mentioned the choice.
+        const advisories = exclusiveAdvisories(results.map((r) => `${r.section} ${r.url}`).join(" "));
+        const advice = advisories.length ? `\n\n${advisories.join("\n\n")}` : "";
+
+        return both(
+          `${hits.length} result(s) for "${query}":\n\n${body}${advice}\n\nRead any page in full with get_doc(url).`,
+          {
+            query,
+            count: results.length,
+            results,
+            ...(advisories.length ? { advisories } : {}),
+          },
+        );
       } catch (e) {
         return fail(e);
       }
