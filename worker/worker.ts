@@ -11,6 +11,7 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 
 import { createServer } from "../src/server.js";
+import { readCall, report, type AnalyticsEnv, type WaitUntil } from "./analytics.js";
 import pkg from "../package.json";
 
 const version = (pkg as { version: string }).version;
@@ -24,8 +25,8 @@ const CORS: Record<string, string> = {
   "Access-Control-Allow-Headers": "Content-Type, Mcp-Protocol-Version, Authorization",
 };
 
-/** Worker bindings. `OPENAI_APPS_CHALLENGE` is a secret, set out of band. */
-interface Env {
+/** Worker bindings. Every one is a secret, set out of band. */
+interface Env extends AnalyticsEnv {
   /**
    * Domain-verification token issued by the OpenAI app-directory portal. Served
    * verbatim from /.well-known/openai-apps-challenge. Set with
@@ -88,7 +89,17 @@ const ALLOWED_ORIGINS = [
 ];
 
 /** Handle one MCP request statelessly: fresh server + transport, JSON response. */
-async function handleMcp(request: Request): Promise<Response> {
+async function handleMcp(request: Request, env: Env, ctx?: WaitUntil): Promise<Response> {
+  // Buffered so the same bytes can be measured and handled. `enableJsonResponse`
+  // means both bodies are one complete JSON document, and the largest possible one
+  // is a capped page read — already fully in memory either way.
+  const requestBody = await request.text();
+  const forTransport = new Request(request.url, {
+    method: "POST",
+    headers: request.headers,
+    body: requestBody,
+  });
+
   const server = createServer({ version, mode: "remote" });
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // stateless — no sessions
@@ -98,14 +109,27 @@ async function handleMcp(request: Request): Promise<Response> {
   });
   await server.connect(transport);
 
-  const res = await transport.handleRequest(request);
+  const res = await transport.handleRequest(forTransport);
   const headers = new Headers(res.headers);
+
   for (const [k, v] of Object.entries(CORS)) headers.set(k, v);
-  return new Response(res.body, { status: res.status, headers });
+
+  // Buffered for the same reason as the request. Telemetry runs after the Response
+  // is constructed and inside ctx.waitUntil, so it cannot delay or fail the answer;
+  // with no GA4 secret configured `report` is a no-op and this costs one JSON.parse.
+  const responseBody = await res.text();
+
+  try {
+    report(env, ctx, readCall(requestBody, responseBody), request.headers.get("user-agent") ?? "", Date.now(), version);
+  } catch {
+    // Measurement must never become a tool failure.
+  }
+
+  return new Response(responseBody, { status: res.status, headers });
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx?: WaitUntil): Promise<Response> {
     const url = new URL(request.url);
 
     if (request.method === "OPTIONS") {
@@ -172,7 +196,7 @@ export default {
         );
       }
 
-      return handleMcp(request);
+      return handleMcp(request, env, ctx);
     }
 
     return new Response("Not found", { status: 404, headers: CORS });

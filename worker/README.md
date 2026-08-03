@@ -165,6 +165,32 @@ Custom Domain under the Worker's **Settings → Domains**.
 - **Upstream fetches are bounded**: 5 s per request, an `imqueue-mcp/<version>`
   user agent so the site's own analytics can see them, and a fall back to the
   stale in-process cache rather than reporting that the docs cannot be searched.
+- **Telemetry ships dormant.** `worker/analytics.ts` reports `mcp_connect` and
+  `mcp_tool_call` to the imqueue.org GA4 property via the Measurement Protocol, so
+  the question the GEO programme is scored on — is an agent reaching for these docs
+  instead of its priors — becomes answerable. With no secret set it is a no-op:
+
+  ```bash
+  npx wrangler secret put GA4_MP_MEASUREMENT_ID   # G-XXXXXXXX (the imqueue.org property)
+  npx wrangler secret put GA4_MP_API_SECRET       # GA4 → Admin → Data streams → Measurement Protocol
+  npx wrangler secret put GA4_MP_DEBUG            # optional: POST to GA4's debug endpoint and log its verdict
+  ```
+
+  Two things to do before setting those:
+
+  1. Register `tool`, `client_name`, `query` and `results` as **event-scoped**
+     custom dimensions in GA4. The other parameters reuse dimensions the property
+     already has (`kind`, `surface`, `crawler`, `operator`, `status`, `visit_id`).
+     Unregistered parameters are collected and unreportable.
+  2. Add a line to imqueue.com/privacy. `query` is text a person typed. It is sent
+     **only when the search returned nothing**, truncated to 100 characters — the
+     corpus-gap signal, and the smallest collection that provides it — but that is
+     still user-entered text leaving the server, and it should be disclosed before
+     it starts.
+
+  There is no per-user identity to collect: the server is stateless and cookieless,
+  so `client_id` is a stable label for a client *family* (`mcp.claude-code`), and
+  every user of one client shares it.
 - **The Worker is a separate artifact from the npm package** — it is bundled from
   `worker/worker.ts` + `src/`, while the tarball builds `src/` only. That is why
   the deploy needs its own trigger: before it was automated the hosted endpoint
