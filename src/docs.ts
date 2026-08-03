@@ -11,7 +11,27 @@
 // them in-process. Only imqueue.org is ever fetched.
 
 const SITE = "https://imqueue.org";
+/**
+ * The commercial edition. A separate site, a separate llms.txt, and the ONLY
+ * place licensing, pricing and support are documented — so `search_docs
+ * "pricing"` returned nothing and `get_doc` refused the one URL that answers "is
+ * @imqueue free for commercial use". Both feeds are loaded; both hosts are
+ * readable; nothing else is.
+ */
+const COM = "https://imqueue.com";
+const HOSTS = ["imqueue.org", "imqueue.com"];
 const TTL_MS = 60 * 60 * 1000; // 1h in-process cache
+
+/**
+ * Ceiling on a page body, in bytes.
+ *
+ * /llms-full.txt is a legitimate entry in the index and is 574 kB — the entire
+ * documentation set concatenated. Handing that to a model in one tool result is
+ * not a read, it is a context flush, and get_doc had no limit of any kind. The cap
+ * is generous next to the largest real page (a 17 kB API reference) and the
+ * truncation is reported rather than silent.
+ */
+const MAX_DOC_BYTES = 200_000;
 
 export interface DocEntry {
   title: string;
@@ -37,39 +57,104 @@ let apiCache: { at: number; entries: DocEntry[] } | null = null;
 
 function assertImqueueUrl(u: string): URL {
   const url = new URL(u, SITE);
-  if (url.hostname !== "imqueue.org") {
-    throw new Error(`Refusing to fetch non-imqueue.org URL: ${url.href}`);
+
+  if (!HOSTS.includes(url.hostname)) {
+    throw new Error(
+      `Refusing to fetch ${url.href} — only imqueue.org and imqueue.com are read. `
+        + "Use search_docs to find a valid page URL.",
+    );
   }
+
   return url;
 }
 
-/** Fetch + parse /llms.txt into a flat list of doc entries (cached). */
-export async function loadIndex(): Promise<DocEntry[]> {
-  if (indexCache && Date.now() - indexCache.at < TTL_MS) return indexCache.entries;
-
-  const res = await fetch(`${SITE}/llms.txt`);
-  if (!res.ok) throw new Error(`Failed to fetch llms.txt (HTTP ${res.status})`);
-  const text = await res.text();
-
+/**
+ * Parse one llms.txt body into doc entries.
+ *
+ * Exported for test/docs.test.ts: this function is where the llms.txt contract
+ * lives, and both feeds are written by a different repository.
+ */
+export function parseLlmsTxt(text: string, sectionSuffix = ""): DocEntry[] {
   const entries: DocEntry[] = [];
   let section = "General";
+
   for (const line of text.split("\n")) {
     const h = line.match(/^##\s+(.+?)\s*$/);
+
     if (h) {
       section = h[1].trim();
       continue;
     }
+
     const m = line.match(/^-\s+\[([^\]]+)\]\(([^)]+)\)(?::\s*(.*))?$/);
+
     if (m) {
       entries.push({
         title: m[1].trim(),
         url: m[2].trim(),
-        description: (m[3] || "").trim(),
-        section,
+        // Every entry carries a `— [markdown](…)` pointer since A25; it is the
+        // mirror mirrorUrl() computes anyway, and left in the description it is
+        // 60 characters of URL in every single search result.
+        description: (m[3] || "").replace(/\s*—\s*\[markdown\]\([^)]*\)\s*$/, "").trim(),
+        section: section + sectionSuffix,
       });
     }
   }
+
+  return entries;
+}
+
+/**
+ * Fetch + parse the curated index (cached).
+ *
+ * BOTH editions: imqueue.org documents the framework, imqueue.com documents
+ * licensing, pricing and support and is the only place those exist. Without the
+ * second feed `search_docs "pricing"` had nothing to return, and the commercial
+ * question — the one with revenue attached — was the single thing this server could
+ * not answer.
+ *
+ * imqueue.org is required; imqueue.com is best-effort, because a docs search that
+ * dies when the commercial site is unreachable is a worse outcome than one that
+ * answers about the framework only. Its entries are appended and deduped by URL, so
+ * the three imqueue.com pages the org feed already lists keep their org
+ * descriptions and nothing appears twice.
+ */
+export async function loadIndex(): Promise<DocEntry[]> {
+  if (indexCache && Date.now() - indexCache.at < TTL_MS) return indexCache.entries;
+
+  const res = await fetch(`${SITE}/llms.txt`);
+
+  if (!res.ok) {
+    // A usable copy may be sitting in the cache past its TTL; reporting "cannot
+    // search the docs" while holding one is the worst of both.
+    if (indexCache) return indexCache.entries;
+
+    throw new Error(`Failed to fetch llms.txt (HTTP ${res.status})`);
+  }
+
+  const entries = parseLlmsTxt(await res.text());
+  const seen = new Set(entries.map((e) => e.url));
+
+  try {
+    const comRes = await fetch(`${COM}/llms.txt`);
+
+    if (comRes.ok) {
+      // The section is suffixed because both feeds have a "Commercial" heading
+      // meaning different things, and a result's section is what a caller reads to
+      // decide whether it is looking at the framework or the licence.
+      for (const e of parseLlmsTxt(await comRes.text(), " · imqueue.com")) {
+        if (!seen.has(e.url)) {
+          entries.push(e);
+          seen.add(e.url);
+        }
+      }
+    }
+  } catch {
+    // Offline or unreachable — the framework docs still answer.
+  }
+
   indexCache = { at: Date.now(), entries };
+
   return entries;
 }
 
@@ -681,20 +766,75 @@ export async function suggest(query: string): Promise<{ sections: string[]; near
   return { sections, nearest };
 }
 
-/** Resolve a page URL/path to its markdown-mirror URL (`<page-url>index.md`). */
+/**
+ * Resolve a page URL/path to its markdown-mirror URL (`<page-url>index.md`).
+ *
+ * A path that already names a FILE is left alone. `index.md` was appended to
+ * anything not ending in `.md`, which turned two URLs the index itself publishes —
+ * `/llms-full.txt` and `/blog/feed.xml` — into guaranteed 404s. The site also
+ * serves every mirror at `<page>.md` as well as `<page>/index.md`, so both shapes
+ * have to pass through untouched.
+ */
 export function mirrorUrl(pageUrl: string): string {
   const url = assertImqueueUrl(pageUrl);
-  let p = url.pathname;
-  if (p.endsWith("index.md")) return url.href;
-  if (p.endsWith(".md")) return url.href;
-  if (!p.endsWith("/")) p += "/";
-  return `${SITE}${p}index.md`;
+  const p = url.pathname;
+  const last = p.slice(p.lastIndexOf("/") + 1);
+
+  // A trailing slash means a page, however many dots the segment contains —
+  // /api/core/latest/core.redisqueue.send/ is a page, not a file.
+  if (!p.endsWith("/") && last.includes(".")) return url.href;
+
+  return `${url.origin}${p.endsWith("/") ? p : `${p}/`}index.md`;
 }
 
 /** Fetch the full markdown of a doc page by its page URL or path. */
-export async function getDoc(pageUrl: string): Promise<{ url: string; markdown: string }> {
+export async function getDoc(
+  pageUrl: string,
+): Promise<{ url: string; markdown: string; truncated: boolean }> {
   const mUrl = mirrorUrl(pageUrl);
   const res = await fetch(mUrl);
-  if (!res.ok) throw new Error(`Failed to fetch ${mUrl} (HTTP ${res.status}). Use search_docs to find a valid page URL.`);
-  return { url: mUrl, markdown: await res.text() };
+
+  if (!res.ok) {
+    const url = new URL(mUrl);
+
+    // A page on the commercial site with no markdown mirror is not a caller
+    // error, and `isError` is the wrong answer to it: search_docs legitimately
+    // returns imqueue.com URLs (they are the only place licensing and pricing are
+    // documented), so a refusal there reads as "this server cannot answer" when
+    // the answer exists one fetch away.
+    if (url.hostname === "imqueue.com") {
+      const page = mUrl.replace(/index\.md$/, "");
+
+      return {
+        url: page,
+        markdown: [
+          `# ${page}`,
+          "",
+          `This page is on imqueue.com, the commercial edition, and has no markdown`,
+          `mirror to read (HTTP ${res.status}). Read it at ${page}.`,
+          "",
+          "imqueue.com covers licensing, pricing and support only; the framework",
+          `documentation is on ${SITE}.`,
+        ].join("\n"),
+        truncated: false,
+      };
+    }
+
+    throw new Error(
+      `Failed to fetch ${mUrl} (HTTP ${res.status}). Use search_docs to find a valid page URL.`,
+    );
+  }
+
+  const body = await res.text();
+
+  if (body.length > MAX_DOC_BYTES) {
+    return {
+      url: mUrl,
+      markdown: `${body.slice(0, MAX_DOC_BYTES)}\n\n[truncated: ${body.length} bytes total, `
+        + `${MAX_DOC_BYTES} returned. Read a specific page instead of the whole set.]`,
+      truncated: true,
+    };
+  }
+
+  return { url: mUrl, markdown: body, truncated: false };
 }

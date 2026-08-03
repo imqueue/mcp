@@ -331,9 +331,9 @@ function registerSharedTools(server: McpServer): void {
     {
       ...meta("Read an @imqueue doc page", "read", true), // fetches a live page from imqueue.org (host-locked)
       description:
-        "Fetch the full markdown of an @imqueue documentation page by its URL (as returned by search_docs). Returns plain markdown suitable for reading and quoting. Only imqueue.org URLs are fetched; anything else is refused.",
+        "Fetch the full markdown of an @imqueue documentation page by its URL (as returned by search_docs). Returns plain markdown suitable for reading and quoting. Only imqueue.org (framework docs) and imqueue.com (licensing, pricing, support) URLs are fetched; anything else is refused. Very large pages are truncated, which the result reports.",
       inputSchema: {
-        url: z.string().describe("An imqueue.org page URL, e.g. https://imqueue.org/get-started/"),
+        url: z.string().describe("An imqueue.org or imqueue.com page URL, e.g. https://imqueue.org/get-started/"),
       },
       // METADATA ONLY — the page body is deliberately NOT in here.
       //
@@ -356,6 +356,9 @@ function registerSharedTools(server: McpServer): void {
         url: z.string().describe("The markdown mirror actually fetched — not always the URL passed in, which is why it is worth returning"),
         mimeType: z.string().describe("Media type of the page body carried in content"),
         bytes: z.number().int().describe("Size of the page body, so a caller can decide before reading it"),
+        truncated: z
+          .boolean()
+          .describe("True when the page was too large to return whole — content holds the leading part only"),
       },
     },
     async ({ url }) => {
@@ -368,6 +371,7 @@ function registerSharedTools(server: McpServer): void {
             url: doc.url,
             mimeType: "text/markdown",
             bytes: doc.markdown.length,
+            truncated: doc.truncated,
           },
         };
       } catch (e) {
