@@ -118,3 +118,24 @@ test("the domain-verification route is a specific match, and never a partial tok
 test("an unknown path 404s", async () => {
   assert.equal((await call("/nope")).status, 404);
 });
+
+test("an unlisted Origin is refused, and no Origin is not", async () => {
+  const post = (headers: Record<string, string>) =>
+    call("/mcp", {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream", ...headers },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+      }),
+    });
+
+  assert.equal((await post({ origin: "https://evil.example" })).status, 403);
+  assert.equal((await post({ origin: "https://imqueue.org" })).status, 200);
+  // Nearly every real client is here: no Origin header at all. If this ever
+  // returns 403 the endpoint is dead for all of them, which is why `allowedHosts`
+  // is not set — the SDK rejects a MISSING Host header, not just a wrong one.
+  assert.equal((await post({})).status, 200);
+});

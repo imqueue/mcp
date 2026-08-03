@@ -55,6 +55,38 @@ interface ApiSymbol {
 let indexCache: { at: number; entries: DocEntry[] } | null = null;
 let apiCache: { at: number; entries: DocEntry[] } | null = null;
 
+/**
+ * How long any single upstream fetch may take.
+ *
+ * There was no timeout anywhere, so a hung origin hung a tool call for as long as
+ * the platform allowed. Measured cost of the work being protected: 0.53 s for
+ * llms.txt and 1.13 s for the symbol index on a fully cold isolate, so five
+ * seconds is far above anything legitimate and far below any client's patience.
+ */
+const FETCH_TIMEOUT_MS = 5000;
+
+/**
+ * Identifies this server to imqueue.org's own analytics.
+ *
+ * The site classifies traffic by user agent (that is the whole point of its
+ * agent-analytics edge), and an unset UA from a Worker is indistinguishable from
+ * anything else calling the feeds. Set by `createServer` so the version is the one
+ * actually running.
+ */
+let userAgent = "imqueue-mcp";
+
+export function setUserAgent(ua: string): void {
+  userAgent = ua;
+}
+
+/** Every upstream fetch goes through here: one timeout, one UA, one place. */
+async function get(url: string): Promise<Response> {
+  return fetch(url, {
+    headers: { "user-agent": userAgent },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
+}
+
 function assertImqueueUrl(u: string): URL {
   const url = new URL(u, SITE);
 
@@ -122,21 +154,30 @@ export function parseLlmsTxt(text: string, sectionSuffix = ""): DocEntry[] {
 export async function loadIndex(): Promise<DocEntry[]> {
   if (indexCache && Date.now() - indexCache.at < TTL_MS) return indexCache.entries;
 
-  const res = await fetch(`${SITE}/llms.txt`);
+  let body: string;
 
-  if (!res.ok) {
-    // A usable copy may be sitting in the cache past its TTL; reporting "cannot
-    // search the docs" while holding one is the worst of both.
+  try {
+    const res = await get(`${SITE}/llms.txt`);
+
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    body = await res.text();
+  } catch (e) {
+    // A usable copy may be sitting in the cache past its TTL. Telling the caller
+    // "cannot search the docs" while holding one is the worst of both outcomes —
+    // and unlike loadApiIndex, which has always degraded gracefully, this threw.
     if (indexCache) return indexCache.entries;
 
-    throw new Error(`Failed to fetch llms.txt (HTTP ${res.status})`);
+    throw new Error(
+      `Failed to fetch llms.txt (${e instanceof Error ? e.message : String(e)})`,
+    );
   }
 
-  const entries = parseLlmsTxt(await res.text());
+  const entries = parseLlmsTxt(body);
   const seen = new Set(entries.map((e) => e.url));
 
   try {
-    const comRes = await fetch(`${COM}/llms.txt`);
+    const comRes = await get(`${COM}/llms.txt`);
 
     if (comRes.ok) {
       // The section is suffixed because both feeds have a "Commercial" heading
@@ -172,7 +213,7 @@ export async function loadApiIndex(): Promise<DocEntry[]> {
   let entries: DocEntry[] = [];
 
   try {
-    const res = await fetch(`${SITE}/api/search-index.json`);
+    const res = await get(`${SITE}/api/search-index.json`);
 
     if (res.ok) {
       const raw: unknown = await res.json();
@@ -195,7 +236,15 @@ export async function loadApiIndex(): Promise<DocEntry[]> {
     // Offline, or the feed is not deployed yet — searchDocs carries on without it.
   }
 
+  // Only replace a good cache with a good result. This used to assign
+  // unconditionally, so ONE transient failure past the TTL emptied the symbol index
+  // for the next hour — 1,152 symbols silently unsearchable, and search_docs still
+  // answering successfully with prose only, which is the hardest kind of outage to
+  // notice.
+  if (!entries.length && apiCache?.entries.length) return apiCache.entries;
+
   apiCache = { at: Date.now(), entries };
+
   return entries;
 }
 
@@ -792,7 +841,7 @@ export async function getDoc(
   pageUrl: string,
 ): Promise<{ url: string; markdown: string; truncated: boolean }> {
   const mUrl = mirrorUrl(pageUrl);
-  const res = await fetch(mUrl);
+  const res = await get(mUrl);
 
   if (!res.ok) {
     const url = new URL(mUrl);

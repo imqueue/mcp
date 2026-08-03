@@ -138,7 +138,33 @@ Custom Domain under the Worker's **Settings → Domains**.
   later want server-initiated streaming/notifications, switch to a
   `sessionIdGenerator` + Durable Object for session storage.
 - **CORS** is permissive (`*`) so browser-based MCP clients / a web playground can
-  connect. Tighten `Access-Control-Allow-Origin` if you want to restrict it.
+  connect, but it advertises `POST, OPTIONS` only — which is all `/mcp` answers —
+  and no longer exposes `Mcp-Session-Id`, a header this stateless server never
+  issues.
+- **Origin IS validated**, and that is a protocol MUST rather than a preference:
+  the transport gets `enableDnsRebindingProtection: true` plus an `allowedOrigins`
+  allowlist. The SDK matches with `Array.includes`, so there are no wildcards and
+  each localhost port has to be listed. A request with **no** Origin header — every
+  non-browser client, i.e. nearly all of them — passes untouched, because only a
+  present-and-unlisted Origin is rejected.
+
+  `allowedHosts` is deliberately left unset. In the SDK a **missing** Host header
+  is a 403, not just a mismatched one, so any request path that failed to surface
+  one would take the endpoint down for everybody — and the Host check exists to stop
+  DNS rebinding against servers bound to a loopback interface, which this public
+  edge Worker on one custom domain is not. If you ever add a second route (a
+  `workers.dev` subdomain, a staging host), that is the moment to reconsider, and
+  you must enumerate every hostname you serve on before enabling it.
+- **Non-POST on `/mcp` is 405 with `Allow: POST, OPTIONS`.** `GET` used to return
+  200 and an empty SSE stream, which the SDK client reads as a clean EOF and then
+  retries indefinitely — roughly 1 req/s, forever, per connected client, with
+  nothing visibly broken. 405 is the one status the client treats as a clean no-op.
+  `HEAD /` now serves the landing page's headers with no body; it used to fall
+  through to the MCP handler, and HEAD is what registry validators and uptime
+  probes send.
+- **Upstream fetches are bounded**: 5 s per request, an `imqueue-mcp/<version>`
+  user agent so the site's own analytics can see them, and a fall back to the
+  stale in-process cache rather than reporting that the docs cannot be searched.
 - **The Worker is a separate artifact from the npm package** — it is bundled from
   `worker/worker.ts` + `src/`, while the tarball builds `src/` only. That is why
   the deploy needs its own trigger: before it was automated the hosted endpoint

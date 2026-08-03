@@ -20,7 +20,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import { searchDocs, getDoc, suggest } from "./docs.js";
+import { searchDocs, getDoc, suggest, setUserAgent } from "./docs.js";
 import { renderPackages, PACKAGES } from "./packages.js";
 import {
   scaffoldService,
@@ -247,7 +247,14 @@ function registerSharedTools(server: McpServer): void {
         // reason to search for a symbol that is in fact indexed.
         "Search the official @imqueue docs (guides, tutorial, CLI manual, articles) and every exported symbol of every @imqueue package that publishes a generated API reference, returning the most relevant pages with their URLs. Each result names the package it belongs to. Takes a plain question or an exact symbol name such as 'RedisQueue.send', 'PgPubSub.listen' or 'watcherCheckDelay'. Answers 'how do I do X in @imqueue' and confirms a signature before code is written against it. Every result carries the page URL, which get_doc reads in full. Some capabilities are covered by two mutually exclusive packages — @imqueue/pg-prisma vs @imqueue/pg-sequelize, @imqueue/opentelemetry vs @imqueue/datadog — so for a query like 'tracing' or 'database', call list_packages for the choosing rule rather than taking whichever package ranks first, and pass `package` here to search within the one you settled on.",
       inputSchema: {
-        query: z.string().describe("A question or a symbol name, e.g. 'expose a service method', 'delayed jobs' or 'IMQOptions.safeDelivery'"),
+        // Bounded because it was not: 200 kB in — a pasted stack trace is a
+        // realistic way to get there — produced 400,190 B out, the query reflected
+        // once in the prose and once in structuredContent.
+        query: z
+          .string()
+          .min(1)
+          .max(200)
+          .describe("A question or a symbol name, e.g. 'expose a service method', 'delayed jobs' or 'IMQOptions.safeDelivery'"),
         limit: z.number().int().min(1).max(20).optional().describe("Max results (default 6)"),
         package: z
           .string()
@@ -717,6 +724,13 @@ function registerInstallGuide(server: McpServer): void {
  */
 export function createServer(opts: { version: string; mode: Mode; cli?: CliHandlers }): McpServer {
   const { version, mode, cli } = opts;
+
+  // imqueue.org classifies its traffic by user agent — that is what its whole
+  // agent-analytics edge is for — and these feed requests arrived with nothing to
+  // identify them, so the server's own reads were indistinguishable from any other
+  // caller's. Set here because this is the only place the running version is known.
+  setUserAgent(`imqueue-mcp/${version} (+https://imqueue.org/mcp/)`);
+
   const server = new McpServer(
     { name: "imqueue", version, ...IDENTITY },
     // `instructions` is stored by the SDK and returned from `initialize`; without

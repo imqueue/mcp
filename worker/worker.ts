@@ -55,12 +55,46 @@ or add to your client's MCP config:
 Learn more: https://imqueue.org/mcp
 `;
 
+/**
+ * Origins the transport will answer.
+ *
+ * Validating Origin is a MUST in every protocol revision this server speaks, and it
+ * was passing no allowlist at all — `POST … -H 'Origin: https://evil.example'`
+ * returned 200. Exploit value is close to zero here (six read-only tools, no auth,
+ * no user data), so what this really costs is directory review, where "does not
+ * validate Origin" is a one-line scripted check.
+ *
+ * The SDK matches with `Array.includes`, so there are no wildcards and localhost
+ * ports have to be enumerated: wrangler's default below, plus vite's. A request
+ * with NO Origin — every non-browser client, which is nearly all of them — passes
+ * untouched, because the SDK only rejects an Origin that is present and unlisted.
+ *
+ * `allowedHosts` is deliberately NOT set, although the audit suggested it. Read the
+ * SDK: `if (!hostHeader || !allowedHosts.includes(hostHeader))` → 403. A MISSING
+ * Host header is rejected, not just a wrong one, so any request path that fails to
+ * surface one would take the whole endpoint down — and that cannot be verified
+ * without deploying, which is precisely what the freeze forbids. The Host check
+ * exists to protect servers bound to a loopback interface from DNS rebinding; this
+ * is a public edge Worker on one custom domain, so it buys nothing here and risks
+ * everything. Origin alone satisfies the MUST.
+ */
+const ALLOWED_ORIGINS = [
+  "https://imqueue.org",
+  "https://imqueue.com",
+  "https://mcp.imqueue.org",
+  "http://localhost:8787",
+  "http://127.0.0.1:8787",
+  "http://localhost:5173",
+];
+
 /** Handle one MCP request statelessly: fresh server + transport, JSON response. */
 async function handleMcp(request: Request): Promise<Response> {
   const server = createServer({ version, mode: "remote" });
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // stateless — no sessions
     enableJsonResponse: true, // request/response JSON, no long-lived SSE
+    enableDnsRebindingProtection: true,
+    allowedOrigins: ALLOWED_ORIGINS,
   });
   await server.connect(transport);
 
