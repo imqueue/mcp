@@ -11,11 +11,17 @@
 // `npm publish` (which has already completed by the time this runs).
 //
 // Requirements on the publishing machine to actually run:
-//   - GITHUB_TOKEN (or GH_TOKEN): a token that can create releases on the repo.
+//   - a token that can create releases on the repo, from the FIRST of these that is
+//     set: GH_AUTH_TOKEN, GITHUB_TOKEN, GH_TOKEN.
 //       * fine-grained PAT: "Contents: Read and write" on imqueue/mcp
 //       * classic PAT: `repo` scope
+//     GH_AUTH_TOKEN is checked first because it is the one a maintainer exports
+//     deliberately, while GITHUB_TOKEN in CI is the ambient repo-scoped token and
+//     may have narrower permissions. An explicit credential should win over an
+//     inherited one.
 //     NEVER commit this — export it in your shell profile or a gitignored .env,
-//     and store it as a CI secret for CI runs.
+//     and store it as a CI secret for CI runs. The script logs which VARIABLE
+//     supplied the token and never the token itself.
 // Optional overrides:
 //   - GITHUB_RELEASE_REPO   owner/repo (default: parsed from package.json "repository")
 //   - GITHUB_API_URL        API base (default: https://api.github.com; set for GH Enterprise)
@@ -36,14 +42,19 @@ const version = pkg.version;
 const tag = `v${version}`;
 const isPrerelease = version.includes("-"); // e.g. 2.1.0-beta.1
 
-const TOKEN = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+const TOKEN_VARS = ["GH_AUTH_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"];
+// The name of the variable that supplied the token, so a failed release says which
+// credential it used. Only the NAME is ever printed.
+const TOKEN_VAR = TOKEN_VARS.find((v) => process.env[v]);
+const TOKEN = TOKEN_VAR ? process.env[TOKEN_VAR] : undefined;
 const API = (process.env.GITHUB_API_URL || "https://api.github.com").replace(/\/+$/, "");
 
 const skip = (why) => {
   console.warn(`\n⚠  GitHub Release skipped — ${why}.`);
   console.warn("   npm publish succeeded; there just isn't a GitHub Release for this version here.");
-  console.warn("   To set it up: export GITHUB_TOKEN (a PAT with Contents:write / `repo` scope),");
-  console.warn(`   or create the release manually for tag ${tag}.\n`);
+  console.warn(`   To set it up: export one of ${TOKEN_VARS.join(", ")} (a PAT with`);
+  console.warn("   Contents:write / `repo` scope), or create the release manually for");
+  console.warn(`   tag ${tag}.\n`);
   process.exit(0); // never block a completed npm publish
 };
 
@@ -57,7 +68,7 @@ const fail = (msg) => {
 };
 
 if (typeof fetch !== "function") skip("global fetch is unavailable (needs Node >= 18)");
-if (!TOKEN) skip("GITHUB_TOKEN / GH_TOKEN is not set");
+if (!TOKEN) skip(`none of ${TOKEN_VARS.join(" / ")} is set`);
 
 // Resolve owner/repo: explicit override, else parse the package.json repository URL.
 function resolveRepo() {
@@ -100,7 +111,7 @@ async function createRelease(withTarget) {
   return gh("/releases", { method: "POST", body: JSON.stringify(body) });
 }
 
-console.log(`\nCreating GitHub Release ${repo}@${tag}…`);
+console.log(`\nCreating GitHub Release ${repo}@${tag} (auth from ${TOKEN_VAR})…`);
 
 // Idempotent: don't duplicate an existing release for this tag.
 const existing = await gh(`/releases/tags/${encodeURIComponent(tag)}`);
