@@ -4,11 +4,14 @@
 //   * /llms.txt              — curated index: `## Section` + `- [Title](url): description`
 //   * /api/search-index.json — every exported symbol of the current majors:
 //                              [{ name, kind, package, url, summary, deprecated? }]
-//   * /<page-url>index.md    — a plain-markdown mirror of every page
+//   * /<page-url>index.md    — a plain-markdown mirror of every page (also <page>.md)
 //   * /blog/search-index.json — [{ title, url, summary, topics, ... }]
 //
-// We fetch these at runtime (so the server never ships stale copies) and cache
-// them in-process. Only imqueue.org is ever fetched.
+// imqueue.com serves the same shapes for the commercial edition — licensing, pricing
+// and support, which the framework docs deliberately do not cover.
+//
+// We fetch these at runtime (so the server never ships stale copies) and cache them
+// in-process. Only those two hosts are ever fetched.
 
 const SITE = "https://imqueue.org";
 /**

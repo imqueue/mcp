@@ -22,9 +22,11 @@ Two surfaces, and they are not the same. The **local** server (`npx -y @imqueue/
 
 All five are read-only: they fetch or generate text and write nothing.
 
-`search_docs`, `list_packages` and the two `scaffold_*` tools also declare an MCP **`outputSchema`** and return `structuredContent` alongside the human-readable markdown, so a client can consume results as data — take `results[0].url` from `search_docs` and hand it to `get_doc`, or write `scaffold_service`'s `files[]` straight to disk — instead of parsing prose and code fences. The markdown is *rendered from* that same structure, so the two can't drift.
+All five also declare an MCP **`outputSchema`** and return `structuredContent` alongside the human-readable markdown, so a client can consume results as data — take `results[0].url` from `search_docs` and hand it to `get_doc`, or write `scaffold_service`'s `files[]` straight to disk — instead of parsing prose and code fences. For the scaffolders and the catalogue the markdown is *rendered from* that same structure, so the two can't drift.
 
-**`get_doc` has no schema, on purpose.** A schema obliges the server to send `structuredContent`, and its only possible fields would be the URL you passed in and the page body verbatim — so it would ship the page twice. On a large API reference that is 16.6 kB of text plus 16.6 kB of structure for one read. Structure earns its place when it makes something possible that parsing prose does not; restating the payload is not that. The CLI-backed tools have no schema either: they return `imq` stdout, which has no shape worth promising.
+**`get_doc`'s schema is metadata only, on purpose** — and that turns out to be the more interesting design than having no schema at all. A schema obliges the server to send `structuredContent`, but nothing says `structuredContent` must repeat what is in `content`: it describes the structured *part* of the answer. So the page travels once, in `content`, and the schema carries `url` (the mirror actually fetched, which is not always the URL you passed), `mimeType`, `bytes` (so a caller can decide before reading) and `truncated`. Putting `markdown` in there as well would have doubled the largest response the server can produce — measured on `/api/rpc/latest/`, 16.6 kB of text plus 16.6 kB of structure for one read. The absence of a body field is itself self-describing: a caller reading the schema sees no content field and knows the page is in `content`, which is where every client already looks.
+
+The CLI-backed tools have no schema: they return `imq` stdout, which has no shape worth promising.
 
 ### CLI-backed tools — local only (require `@imqueue/cli` on PATH)
 

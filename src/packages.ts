@@ -1,12 +1,19 @@
 // Static catalog of the @imqueue packages, so an agent can pick the right one
 // before scaffolding.
 //
-// This lists EVERY published package, not a curated subset. It used to be
+// This lists every DOCUMENTED package, not a curated subset. It used to be
 // deliberately short, on the grounds that the rest was reachable via
 // search_docs — but an agent cannot search for a package it has no reason to
 // believe exists, so anything missing here was effectively invisible. Keep it in
 // step with scripts/lib/api-packages.js in the imqueue.com repo, which is the
 // other place the full set is enumerated.
+//
+// "Documented" rather than "published": @imqueue/js, @imqueue/travis and
+// @imqueue/mcp are published and deliberately undocumented — zero mentions in
+// llms.txt, absent from api-packages.js — so listing them here would advertise a
+// surface with nothing to read. The tool description says "documented" for the
+// same reason; it used to say "the main packages", which contradicted this comment
+// and undersold the one call that tells an agent what exists.
 //
 // Ordered by what an agent reaches for first — the spine and the CLI, then the
 // capability packages grouped the way imqueue.org/api/ groups them.

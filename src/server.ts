@@ -392,7 +392,7 @@ function registerSharedTools(server: McpServer): void {
     {
       ...meta("List @imqueue packages", "read", false), // renders a catalogue compiled into the build
       description:
-        "Return the main @imqueue packages with a one-line summary and install command, so you can pick the right one.",
+        "The complete, authoritative catalogue of documented @imqueue packages, each with a one-line summary and its exact install command. Call this BEFORE adding any @imqueue dependency: search_docs can only find a package you already suspect exists, and this is the list. Covers typed RPC over a message queue, the Redis queue engine, the `imq` CLI, jobs and scheduling, Prisma and Sequelize database toolkits, method caching, tag-invalidated caching, PostgreSQL LISTEN/NOTIFY, Zod validation, OpenTelemetry or Datadog tracing, async logging, GraphQL N+1 batching across services, CIDR/IP checks and HTTP rate limiting. Some pairs are mutually exclusive — pg-prisma vs pg-sequelize, opentelemetry vs datadog — and installing both of a pair breaks silently, so read the `pick` rule on those entries before choosing.",
       inputSchema: {},
       outputSchema: {
         packages: z
