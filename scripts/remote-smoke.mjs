@@ -21,7 +21,14 @@ function check(label, cond, extra = "") {
   console.log(`${ok(cond)} ${label}${extra ? " — " + extra : ""}`);
 }
 
+// A hard ceiling on any single call, and the slowest one is asserted at the end.
+// Without this a hung origin hangs the smoke run, i.e. the check meant to catch a
+// hang becomes another thing that hangs.
+const RPC_TIMEOUT_MS = 15000;
+let slowest = { method: "none", ms: 0 };
+
 async function rpc(method, params) {
+  const started = Date.now();
   const res = await fetch(target, {
     method: "POST",
     headers: {
@@ -29,7 +36,14 @@ async function rpc(method, params) {
       accept: "application/json, text/event-stream",
     },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params: params ?? {} }),
+    signal: AbortSignal.timeout(RPC_TIMEOUT_MS),
   });
+
+  const elapsed = Date.now() - started;
+
+  if (elapsed > slowest.ms) {
+    slowest = { method: params?.name ? `${method} ${params.name}` : method, ms: elapsed };
+  }
 
   const body = await res.text();
 
@@ -46,9 +60,86 @@ async function rpc(method, params) {
   return json.result;
 }
 
+/** Fetch with a hard deadline, so a hang FAILS instead of hanging the smoke run. */
+async function timed(url, init = {}, ms = 5000) {
+  const started = Date.now();
+  const res = await fetch(url, { ...init, signal: AbortSignal.timeout(ms) });
+
+  return { res, ms: Date.now() - started };
+}
+
 console.log(`Hosted MCP smoke: ${target}\n`);
 
 try {
+  // METHOD HANDLING, first — because this is the check whose absence let a hang
+  // reach production and stay there. remote-smoke asserted the tool list and the
+  // annotations, i.e. everything except how the endpoint answers a request that
+  // is not a tool call, and `GET /mcp` was returning 200 with an empty SSE stream:
+  // a clean EOF to the SDK client, which then reconnects at ~1/s forever with
+  // nothing visibly broken.
+  for (const method of ["GET", "DELETE"]) {
+    try {
+      const { res, ms } = await timed(target, { method }, 2000);
+
+      check(`${method} ${new URL(target).pathname} → 405`, res.status === 405, `${res.status} in ${ms}ms`);
+
+      if (res.status === 405) {
+        check(`${method} advertises Allow: POST`, (res.headers.get("allow") ?? "").includes("POST"), res.headers.get("allow") ?? "absent");
+      }
+    } catch (e) {
+      // A timeout here IS the defect, so it must fail rather than abort the run.
+      check(`${method} ${new URL(target).pathname} → 405`, false, e.name === "TimeoutError" ? "no answer within 2s — the hang is back" : String(e.message));
+    }
+  }
+
+  // An SSE accept header is the exact request that returned an empty stream.
+  try {
+    const { res } = await timed(target, { method: "GET", headers: { accept: "text/event-stream" } }, 2000);
+
+    check("GET with an SSE accept header → 405", res.status === 405, String(res.status));
+  } catch (e) {
+    check("GET with an SSE accept header → 405", false, e.name === "TimeoutError" ? "no answer within 2s" : String(e.message));
+  }
+
+  // HEAD on the root was gated out of the landing page and fell through to the MCP
+  // handler — an RFC 9110 violation, and HEAD is what registry validators and
+  // uptime probes send.
+  {
+    const { res } = await timed(origin, { method: "HEAD" }, 5000);
+
+    check("HEAD / → 200", res.status === 200, String(res.status));
+  }
+
+  // A client that asks for JSON only must still be served: enableJsonResponse is
+  // on, so there is no reason to require the SSE accept value, and a client that
+  // gets 406 here concludes the server is broken.
+  {
+    const { res } = await timed(target, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "remote-smoke", version: "0" } },
+      }),
+    });
+
+    check("POST with a JSON-only accept header is served", res.status === 200, String(res.status));
+  }
+
+  // An unlisted Origin must be refused — a protocol MUST, and a one-line scripted
+  // check at directory review.
+  {
+    const { res } = await timed(target, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream", origin: "https://evil.example" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "x", version: "0" } } }),
+    });
+
+    check("an unlisted Origin is refused", res.status === 403, String(res.status));
+  }
+
   const init = await rpc("initialize", {
     protocolVersion: "2024-11-05",
     capabilities: {},
@@ -170,7 +261,65 @@ try {
   // generic failure — a reviewer checks this explicitly.
   const refused = await rpc("tools/call", { name: "get_doc", arguments: { url: "https://example.com/" } });
   const refusedText = refused?.content?.[0]?.text ?? "";
-  check("get_doc refuses a non-imqueue.org URL", /imqueue\.org/i.test(refusedText), refusedText.slice(0, 90));
+  check("get_doc refuses a third-party URL", /imqueue\.org/i.test(refusedText), refusedText.slice(0, 90));
+
+  // Both editions are readable, and the commercial one is the only place the
+  // licensing question is answered.
+  const commercial = await rpc("tools/call", { name: "search_docs", arguments: { query: "commercial license pricing", limit: 4 } });
+  const comResults = commercial?.structuredContent?.results ?? [];
+  check(
+    "search_docs answers the commercial question",
+    comResults.some((r) => r.url.includes("imqueue.com")),
+    comResults.map((r) => r.url).join(" | ") || "no results",
+  );
+
+  const comDoc = await rpc("tools/call", { name: "get_doc", arguments: { url: "https://imqueue.com/pricing/" } });
+  check(
+    "get_doc reads an imqueue.com page instead of refusing it",
+    !comDoc?.isError && (comDoc?.content?.[0]?.text ?? "").length > 100,
+    (comDoc?.content?.[0]?.text ?? "").split("\n")[0]?.slice(0, 70),
+  );
+
+  // A URL that names a file must not have index.md appended to it.
+  const feed = await rpc("tools/call", { name: "get_doc", arguments: { url: "https://imqueue.org/blog/feed.xml" } });
+  check(
+    "get_doc reads a URL that already names a file",
+    !feed?.isError && (feed?.content?.[0]?.text ?? "").includes("<feed"),
+    feed?.structuredContent?.url ?? "absent",
+  );
+
+  // The whole documentation set is a legitimate index entry at 574 kB; returning it
+  // whole is a context flush rather than a read.
+  const full = await rpc("tools/call", { name: "get_doc", arguments: { url: "https://imqueue.org/llms-full.txt" } });
+  check(
+    "an oversized page is truncated and says so",
+    full?.structuredContent?.truncated === true && full.structuredContent.bytes < 400_000,
+    `${full?.structuredContent?.bytes} B, truncated=${full?.structuredContent?.truncated}`,
+  );
+
+  // The client idiom, on the wire. A wrong one here propagates into public
+  // repositories and back into training data.
+  const client = await rpc("tools/call", { name: "scaffold_client", arguments: { service: "user" } });
+  const cs = client?.structuredContent ?? {};
+  check(
+    "scaffold_client emits the namespace import that actually resolves",
+    cs.namespace === "userService"
+      && cs.generateCommand === "imq client generate UserService ./src/clients"
+      && cs.output === "./src/clients/UserService.ts"
+      && (cs.example?.content ?? "").includes("new userService.UserClient("),
+    `${cs.generateCommand} -> ${cs.output}`,
+  );
+
+  // A complex type must arrive with the decorators it needs, or the generated client
+  // types it `any` — which compiles.
+  const svc = await rpc("tools/call", { name: "scaffold_service", arguments: { name: "user", methods: [{ name: "get", params: [{ name: "id", type: "string" }], returns: "User" }] } });
+  const files = svc?.structuredContent?.files ?? [];
+  check(
+    "scaffold_service declares the complex types it names",
+    JSON.stringify(svc?.structuredContent?.types) === JSON.stringify(["User"])
+      && files.some((f) => f.path === "types.ts" && f.content.includes("@classType()")),
+    (svc?.structuredContent?.types ?? []).join(", ") || "none",
+  );
 
   // Domain verification. Both outcomes are legitimate: 404 until the portal issues a
   // token, then the token. What must never happen is a 200 carrying nothing useful —
@@ -194,6 +343,11 @@ try {
   // match and not a catch-all that would answer any probe.
   const other = await fetch(`${origin}/.well-known/something-else`);
   check("unrelated .well-known path still 404s", other.status === 404, String(other.status));
+
+  // Measured warm: 0.49–0.54 s, and a fully cold isolate is bounded by ~1.7 s of
+  // origin time. Five seconds means something has gone wrong upstream that a client
+  // will feel long before anyone reads a dashboard.
+  check(`no call took longer than 5s (slowest: ${slowest.method})`, slowest.ms <= 5000, `${slowest.ms}ms`);
 
   console.log(failures ? `\n${failures} hosted check(s) FAILED` : "\nAll hosted checks passed");
 } catch (e) {

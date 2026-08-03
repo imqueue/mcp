@@ -126,6 +126,32 @@ for (let i = 1; i <= TRIES; i++) {
   }
   if (live === version) {
     console.log(`✔ ${URL_} is live on ${version} (attempt ${i})\n`);
+
+    // Serving the right VERSION is not the same as serving the right CONTRACT.
+    // Everything this script checked was that a handshake answers with the expected
+    // number — which is why a `GET /mcp` that returned 200 and an empty stream, and
+    // an `HEAD /` that fell through to the MCP handler, shipped and stayed shipped.
+    // remote-smoke asserts the tool list, the annotations, the search → get_doc
+    // chain and the method handling, and it existed all along with nothing running
+    // it anywhere.
+    console.log("→ node scripts/remote-smoke.mjs (contract, not just version)");
+
+    const smoke = spawnSync("node", ["scripts/remote-smoke.mjs", URL_], { stdio: "inherit", cwd: root });
+
+    if (smoke.status !== 0) {
+      // Deliberately non-zero, like a failed deploy: the Worker is live and serving
+      // something that fails its own contract, which is worth interrupting a release
+      // for. Nothing is rolled back automatically — `wrangler rollback` is a
+      // decision, not a reflex.
+      console.error(
+        `\n✖ ${URL_} serves ${version} but FAILED the hosted smoke test.\n`
+          + "  The deploy took effect; the contract did not hold. Read the failures above,\n"
+          + `  then either fix forward and re-run \`npm run deploy:worker\`, or roll back with\n`
+          + "  `npx wrangler rollback`.\n",
+      );
+      process.exit(1);
+    }
+
     process.exit(0);
   }
   if (i < TRIES) {

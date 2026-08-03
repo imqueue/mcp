@@ -88,6 +88,33 @@ const ALLOWED_ORIGINS = [
   "http://localhost:5173",
 ];
 
+/**
+ * Add the SSE accept value the SDK insists on, when the client did not send it.
+ *
+ * The transport requires BOTH `application/json` and `text/event-stream` in Accept
+ * and answers 406 otherwise — which is spec-conforming, since the client MUST send
+ * both, but it means `Accept: application/json`, `Accept: * / *` and no Accept header
+ * at all are all refused. This server has `enableJsonResponse: true`, so it never
+ * emits an event stream: refusing a client over a header that cannot affect the
+ * response is gatekeeping, and a caller reading 406 concludes the endpoint is broken.
+ *
+ * Only ADDED, never replaced, and only when JSON is already acceptable — so the
+ * media type a client receives is always one it asked for. A client that asked for
+ * `text/event-stream` ALONE is left to its 406: it wants a stream, and that is the
+ * one thing here that genuinely does not exist.
+ */
+function acceptable(headers: Headers): Headers {
+  const out = new Headers(headers);
+  const accept = out.get("accept") ?? "";
+
+  if ((!accept || accept.includes("*/*") || accept.includes("application/json"))
+    && !accept.includes("text/event-stream")) {
+    out.set("accept", "application/json, text/event-stream");
+  }
+
+  return out;
+}
+
 /** Handle one MCP request statelessly: fresh server + transport, JSON response. */
 async function handleMcp(request: Request, env: Env, ctx?: WaitUntil): Promise<Response> {
   // Buffered so the same bytes can be measured and handled. `enableJsonResponse`
@@ -96,7 +123,7 @@ async function handleMcp(request: Request, env: Env, ctx?: WaitUntil): Promise<R
   const requestBody = await request.text();
   const forTransport = new Request(request.url, {
     method: "POST",
-    headers: request.headers,
+    headers: acceptable(request.headers),
     body: requestBody,
   });
 

@@ -119,6 +119,33 @@ test("an unknown path 404s", async () => {
   assert.equal((await call("/nope")).status, 404);
 });
 
+test("a client is not refused over an Accept header that cannot matter", async () => {
+  const body = JSON.stringify({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+  });
+  const post = (accept?: string) =>
+    call("/mcp", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(accept ? { accept } : {}) },
+      body,
+    });
+
+  // The SDK requires both media types literally, so all three of these were 406 —
+  // and this server never emits an event stream, so the header cannot affect the
+  // answer. A caller reading 406 concludes the endpoint is broken.
+  assert.equal((await post("application/json")).status, 200);
+  assert.equal((await post("*/*")).status, 200);
+  assert.equal((await post()).status, 200);
+  assert.equal((await post("application/json, text/event-stream")).status, 200);
+
+  // Asked for a stream and nothing else. That is the one thing here that really
+  // does not exist, so the 406 is correct.
+  assert.equal((await post("text/event-stream")).status, 406);
+});
+
 test("an unlisted Origin is refused, and no Origin is not", async () => {
   const post = (headers: Record<string, string>) =>
     call("/mcp", {
