@@ -1,0 +1,55 @@
+# Build, type-check and unit-test on every push.
+#
+# WHY this did not exist: the repo had `smoke` and `smoke:remote` and nothing ran
+# either of them — the only hit for `smoke:remote` across .github/, package.json and
+# README.md was its own definition. That is the same failure mode as an assertion
+# nobody wrote: a check that runs nowhere protects nothing, and there are now 58 unit
+# tests whose whole point is to fail before a release rather than after one.
+#
+# WHAT IS DELIBERATELY NOT HERE: `npm run smoke`. It drives the real server against
+# the live imqueue.org feeds and asserts things about RANKING, so a blog post
+# published in a different repository could turn this job red. A scheduled job that
+# cries wolf gets muted, and this one has to stay trustworthy. The smoke tests run
+# locally and, more importantly, as a publish gate (`prepublishOnly`) and a deploy
+# gate (deploy-worker.mjs) — the two moments where being wrong actually costs
+# something.
+
+name: Checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build, type-check, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # tsc on src/ — the same compile that produces the published tarball.
+      - run: npm run build
+
+      # The Worker is NOT covered by the build: it has its own tsconfig and is
+      # bundled by wrangler, which is how it once sat five releases behind npm.
+      - run: npm run typecheck:worker
+
+      # The tests themselves are type-checked too. tsx strips types rather than
+      # checking them, so without this a test could reference a symbol that no
+      # longer exists and still run green.
+      - run: npm run typecheck:test
+
+      - run: npm test

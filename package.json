@@ -44,7 +44,7 @@
     "smoke": "node scripts/smoke.mjs",
     "smoke:remote": "node scripts/remote-smoke.mjs",
     "version": "node scripts/sync-version.mjs && git add server.json",
-    "prepublishOnly": "npm run build",
+    "prepublishOnly": "npm run verify",
     "postpublish": "node scripts/deploy-worker.mjs && node scripts/publish-registry.mjs && node scripts/publish-github-release.mjs",
     "typecheck:worker": "tsc --noEmit -p worker/tsconfig.json",
     "dev:worker": "wrangler dev",

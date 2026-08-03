@@ -96,8 +96,15 @@ It serves six tools, **all read-only**: the five above plus `local_install_guide
 npm install
 npm run build      # tsc -> dist/
 npm run dev        # run from source with tsx
+npm test           # unit tests (node:test under tsx) — no network needed
 npm run smoke      # local surface: handshake + tools/list + annotations + tool calls
+npm run verify     # all of the above plus both type-checks; also the publish gate
 ```
+
+The unit tests cover what does not need the network: the ranker on a fixed corpus,
+the exact identifiers the scaffolders emit, URL resolution, telemetry, and the hosted
+Worker's HTTP surface — `worker/worker.ts` is a plain fetch handler, so it is called
+with a `Request` and asserted on the `Response`, with no wrangler and no deploy.
 
 The hosted surface has its own check, because it is a different contract:
 
