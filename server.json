@@ -8,7 +8,7 @@
     "url": "https://github.com/imqueue/mcp",
     "source": "github"
   },
-  "version": "3.2.3",
+  "version": "3.2.4",
   "websiteUrl": "https://imqueue.org/mcp/",
   "icons": [
     {
@@ -30,7 +30,7 @@
     {
       "registryType": "npm",
       "identifier": "@imqueue/mcp",
-      "version": "3.2.3",
+      "version": "3.2.4",
       "transport": {
         "type": "stdio"
       }
