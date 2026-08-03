@@ -20,7 +20,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import { searchDocs, getDoc } from "./docs.js";
+import { searchDocs, getDoc, suggest } from "./docs.js";
 import { renderPackages, PACKAGES } from "./packages.js";
 import {
   scaffoldService,
@@ -245,10 +245,16 @@ function registerSharedTools(server: McpServer): void {
         // @imqueue/rpc" while the index already carried pg-pubsub, pg-cache and
         // tag-cache, which is worse than saying nothing: an agent reading it has no
         // reason to search for a symbol that is in fact indexed.
-        "Search the official @imqueue docs (guides, tutorial, CLI manual, articles) and every exported symbol of every @imqueue package that publishes a generated API reference, returning the most relevant pages with their URLs. Each result names the package it belongs to. Takes a plain question or an exact symbol name such as 'RedisQueue.send', 'PgPubSub.listen' or 'watcherCheckDelay'. Answers 'how do I do X in @imqueue' and confirms a signature before code is written against it. Every result carries the page URL, which get_doc reads in full.",
+        "Search the official @imqueue docs (guides, tutorial, CLI manual, articles) and every exported symbol of every @imqueue package that publishes a generated API reference, returning the most relevant pages with their URLs. Each result names the package it belongs to. Takes a plain question or an exact symbol name such as 'RedisQueue.send', 'PgPubSub.listen' or 'watcherCheckDelay'. Answers 'how do I do X in @imqueue' and confirms a signature before code is written against it. Every result carries the page URL, which get_doc reads in full. Some capabilities are covered by two mutually exclusive packages — @imqueue/pg-prisma vs @imqueue/pg-sequelize, @imqueue/opentelemetry vs @imqueue/datadog — so for a query like 'tracing' or 'database', call list_packages for the choosing rule rather than taking whichever package ranks first, and pass `package` here to search within the one you settled on.",
       inputSchema: {
         query: z.string().describe("A question or a symbol name, e.g. 'expose a service method', 'delayed jobs' or 'IMQOptions.safeDelivery'"),
         limit: z.number().int().min(1).max(20).optional().describe("Max results (default 6)"),
+        package: z
+          .string()
+          .optional()
+          .describe(
+            "Restrict results to one package, e.g. 'http-protect' or '@imqueue/opentelemetry'. Use it once you know which package you want — the same words appear in several packages' symbols.",
+          ),
       },
       // Structured results are the point of this tool: a client should be able to
       // take `results[0].url` and hand it to get_doc without regexing the prose.
@@ -268,9 +274,9 @@ function registerSharedTools(server: McpServer): void {
           .describe("Most relevant first"),
       },
     },
-    async ({ query, limit }) => {
+    async ({ query, limit, package: pkg }) => {
       try {
-        const hits = await searchDocs(query, limit ?? 6);
+        const hits = await searchDocs(query, limit ?? 6, pkg);
         const results = hits.map((h) => ({
           title: h.title,
           section: h.section,
@@ -281,12 +287,30 @@ function registerSharedTools(server: McpServer): void {
 
         // A miss is still a successful call with an empty result set — the text
         // says so in words, the structure says so with count: 0.
+        //
+        // What it says MATTERS: "try broader terms" is advice the model already
+        // had, and a model that gets nothing twice stops asking and answers from
+        // its priors. So name what the corpus contains and the real vocabulary
+        // nearest the query, which is information it cannot have.
         if (!hits.length) {
-          return both(`No matches for "${query}". Try broader terms or call list_packages.`, {
-            query,
-            count: 0,
-            results,
-          });
+          const { sections, nearest } = await suggest(query);
+          const lines = [
+            `No matches for "${query}"${pkg ? ` in ${pkg}` : ""}.`,
+            "",
+            `This index covers: ${sections.join(", ")}.`,
+          ];
+
+          if (nearest.length) {
+            lines.push("", `Indexed terms nearest your query: ${nearest.join(", ")}.`);
+          }
+
+          if (pkg) {
+            lines.push("", "Drop the `package` filter to search the whole corpus.");
+          }
+
+          lines.push("", "call list_packages for the full catalogue of what exists.");
+
+          return both(lines.join("\n"), { query, count: 0, results });
         }
 
         const body = hits.map((h) => `### ${h.title}  _(${h.section})_\n${h.description}\n${h.url}`).join("\n\n");

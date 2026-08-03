@@ -260,6 +260,45 @@ try {
     }
   } catch { console.log("⚠️  search_docs (question ranking) skipped (no network)"); }
 
+  // Three ranking rules that only a live corpus exercises. The unit tests pin the
+  // rules on a fixed corpus (test/ranking.test.ts); these confirm they still hold
+  // against the real 1,500-entry index, where term weights are what decide.
+  try {
+    const res = async (args) =>
+      (await rpc(11, "tools/call", { name: "search_docs", arguments: args }))
+        ?.result?.structuredContent?.results ?? [];
+
+    // A symbol whose NAME says nothing about the query, found through its
+    // hand-written summary. This scored exactly zero before.
+    const sig = await res({ query: "SIGABRT", limit: 5 });
+    if (!sig.length) {
+      console.log("⚠️  search_docs (summary-only match) skipped (no network)");
+    } else {
+      check(
+        "a symbol is findable by its summary alone",
+        sig.some((r) => r.url.includes("handlesignals")),
+        sig.map((r) => r.url.replace("https://imqueue.org", "")).join(" | "),
+      );
+    }
+
+    // One member name repeated across six classes used to fill every slot.
+    const stops = await res({ query: "how do I stop a service cleanly on SIGTERM", limit: 6 });
+    check(
+      "one member name does not fill the answer",
+      stops.filter((r) => /\.stop\/$/.test(r.url)).length <= 2,
+      stops.map((r) => r.url.replace("https://imqueue.org", "")).join(" | "),
+    );
+
+    // The package filter, which is the reliable way to ask about one of a
+    // mutually exclusive pair.
+    const scoped = await res({ query: "tracing", limit: 5, package: "opentelemetry" });
+    check(
+      "the package filter returns only that package",
+      scoped.length > 0 && scoped.every((r) => r.url.includes("/opentelemetry/")),
+      scoped.map((r) => r.url.replace("https://imqueue.org", "")).join(" | "),
+    );
+  } catch { console.log("⚠️  search_docs (live ranking rules) skipped (no network)"); }
+
   // get_doc must reach the markdown mirror of a generated API page.
   try {
     const doc = await rpc(8, "tools/call", { name: "get_doc", arguments: { url: "https://imqueue.org/api/core/latest/core.redisqueue.send/" } });
