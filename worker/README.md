@@ -191,13 +191,21 @@ Custom Domain under the Worker's **Settings → Domains**.
   There is no per-user identity to collect: the server is stateless and cookieless,
   so `client_id` is a stable label for a client *family* (`mcp.claude-code`), and
   every user of one client shares it.
-- **Re-verify without redeploying.** `wrangler deploy` accepting an upload is not the
-  same as every colo serving it: for a short window after a deploy, two versions
-  answer the same hostname. So the deploy step now requires **three consecutive**
-  probes reporting the new version before it runs the contract smoke, and passes the
-  expected version to `remote-smoke.mjs` so being answered by a lagging isolate says
-  so instead of looking like a contract failure. If you need to check what is live
-  right now:
+- **Propagation is not observable from one client, so the smoke distinguishes rather
+  than waits.** `wrangler deploy` accepting an upload is not every colo serving it,
+  and consecutive probes from one machine mostly reach the same colo over a reused
+  connection — three matches in a row prove very little. (3.2.1 and 3.2.2 both
+  confirmed the new version and were then answered by the previous one seconds later.)
+
+  So `remote-smoke.mjs` takes the expected version as its second argument and has
+  **three** outcomes: `0` all passed, `1` failed while consistently serving the
+  expected build — real, stop — and `2` failed *and* saw another version during the
+  run, which is a rollout in progress. `deploy-worker.mjs` retries only `2`. A genuine
+  contract break fails on the first attempt and is never retried into silence; a
+  lagging isolate resolves itself. The smoke also waits for the expected version
+  before asserting, and re-reads it at the end in case a colo rolls over mid-run.
+
+  If you need to check what is live right now:
 
   ```bash
   MCP_WORKER_VERIFY_ONLY=1 npm run deploy:worker   # propagation + full contract, no deploy

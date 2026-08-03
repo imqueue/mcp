@@ -78,9 +78,77 @@ async function timed(url, init = {}, ms = 5000) {
   return { res, ms: Date.now() - started };
 }
 
+/**
+ * Set when any handshake in this run reported a version other than the expected one.
+ *
+ * This is the difference between "the contract is broken" and "I was answered by an
+ * isolate that has not rolled over yet", and the two must not share an exit code:
+ * the first should stop a release, the second should be retried. See the exit at the
+ * bottom of the file.
+ */
+let sawStaleVersion = false;
+
+/** The version the endpoint currently reports, or null if it could not be read. */
+async function liveVersion() {
+  try {
+    const { res } = await timed(target, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "version-probe", version: "0" } },
+      }),
+    });
+    const body = await res.text();
+    const framed = body.match(/^data:\s*(.*)$/m);
+
+    return JSON.parse(framed ? framed[1] : body)?.result?.serverInfo?.version ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Wait for the endpoint to report the expected version before asserting anything.
+ *
+ * Every assertion here is about one version's contract, so starting while the
+ * previous one is still answering produces failures that describe code nobody is
+ * asking about. Polling from a single client cannot prove global propagation — the
+ * requests mostly land on the same colo over a reused connection — so this is a
+ * settling wait, not a proof. The retry logic in deploy-worker.mjs is what actually
+ * covers being answered by a stale isolate later in the run.
+ */
+async function waitForExpectedVersion() {
+  if (!expectVersion) return;
+
+  const DEADLINE_MS = 60000;
+  const started = Date.now();
+
+  for (let attempt = 1; Date.now() - started < DEADLINE_MS; attempt++) {
+    const live = await liveVersion();
+
+    if (live === expectVersion) {
+      if (attempt > 1) console.log(`ℹ️  settled on ${expectVersion} after ${((Date.now() - started) / 1000).toFixed(1)}s\n`);
+
+      return;
+    }
+
+    sawStaleVersion = true;
+    console.log(`ℹ️  waiting for ${expectVersion}, got ${live ?? "no answer"} (${attempt})`);
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+
+  console.log(`ℹ️  gave up waiting for ${expectVersion} after ${DEADLINE_MS / 1000}s — asserting anyway\n`);
+}
+
 console.log(`Hosted MCP smoke: ${target}\n`);
 
 try {
+  // Before any assertion, make sure we are talking to the build under test.
+  await waitForExpectedVersion();
+
   // METHOD HANDLING, first — because this is the check whose absence let a hang
   // reach production and stay there. remote-smoke asserted the tool list and the
   // annotations, i.e. everything except how the endpoint answers a request that
@@ -163,12 +231,14 @@ try {
   if (expectVersion) {
     const live = init?.serverInfo?.version;
 
+    if (live !== expectVersion) sawStaleVersion = true;
+
     check(
       `serving the expected version ${expectVersion}`,
       live === expectVersion,
       live === expectVersion
         ? live
-        : `got ${live} — a colo is still rolling out, so any failure below may be stale; re-run in a moment`,
+        : `got ${live} — a colo is still rolling out, so any failure below may be stale`,
     );
   }
 
@@ -393,6 +463,19 @@ try {
   // will feel long before anyone reads a dashboard.
   check(`no call took longer than 5s (slowest: ${slowest.method})`, slowest.ms <= 5000, `${slowest.ms}ms`);
 
+  // Re-read the version at the END. A colo can roll over part-way through, so a run
+  // that started on the right build can still be answered by the wrong one in the
+  // middle — and that is the shape of the false failure this whole mechanism exists
+  // to stop being mistaken for a broken contract.
+  if (expectVersion) {
+    const closing = await liveVersion();
+
+    if (closing !== expectVersion) {
+      sawStaleVersion = true;
+      console.log(`ℹ️  endpoint reported ${closing} on a closing probe (expected ${expectVersion})`);
+    }
+  }
+
   console.log(failures ? `\n${failures} hosted check(s) FAILED` : "\nAll hosted checks passed");
 } catch (e) {
   failures++;
@@ -400,4 +483,27 @@ try {
   console.log(`\n${failures} hosted check(s) FAILED`);
 }
 
-process.exit(failures ? 1 : 0);
+// THREE outcomes, not two.
+//
+//   0 — everything passed.
+//   2 — something failed AND a stale version answered at some point during the run.
+//       That is very likely a rollout in progress rather than a broken contract, so
+//       deploy-worker.mjs retries this instead of failing the release. A genuine
+//       defect will still be there on the retry; a stale isolate will not.
+//   1 — something failed while the endpoint consistently served the expected build.
+//       Real. Stop.
+//
+// Conflating 2 with 1 is what turned two consecutive releases into false alarms; the
+// contract was correct both times and the endpoint was answering from a version that
+// no longer existed a few seconds later.
+if (!failures) process.exit(0);
+
+if (sawStaleVersion) {
+  console.log(
+    `\n⚠  ${failures} check(s) failed, and the endpoint served a version other than `
+      + `${expectVersion} during this run. Treating as a rollout in progress (exit 2).`,
+  );
+  process.exit(2);
+}
+
+process.exit(1);

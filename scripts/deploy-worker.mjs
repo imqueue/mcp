@@ -47,17 +47,20 @@ const URL_ = process.env.MCP_WORKER_URL || "https://mcp.imqueue.org/mcp";
 const TRIES = Number(process.env.MCP_WORKER_TRIES || 20);
 const DELAY = Number(process.env.MCP_WORKER_DELAY_MS || 3000);
 /**
- * How many CONSECUTIVE probes must report the new version before it counts as
- * deployed.
+ * How many consecutive probes must report the new version before the contract smoke
+ * starts. A SETTLING DELAY — explicitly not a proof of propagation.
  *
- * One is not enough, and this cost a release: 3.2.1's deploy was accepted on the
- * first matching probe, then remote-smoke — running seconds later — got answered by
- * an isolate still on 3.2.0 and reported three annotation failures that had already
- * been fixed. Cloudflare rolls a new version out across colos, so for a short window
- * two versions answer the same hostname and a single probe is a coin toss.
+ * Do not mistake this for one, as an earlier version of this comment did. Consecutive
+ * requests from one machine mostly reach the same colo over a reused connection, so
+ * three matches in a row say little about the isolates the next request might land
+ * on: 3.2.2 confirmed 3/3 and was then answered by 3.2.1 immediately afterwards, the
+ * same false alarm 3.2.1 produced.
  *
- * Three in a row, spaced by DELAY, is cheap (a few seconds on an already-slow step)
- * and turns "probably propagated" into "propagated everywhere this client can reach".
+ * Global propagation is not observable from one client, so it is not what this
+ * guards. The real mechanism is downstream: remote-smoke reports being answered by
+ * another version distinctly (exit 2) and that case is retried. This just avoids
+ * starting at the least favourable possible moment, for a few seconds on a step that
+ * already takes longer than that.
  */
 const CONFIRMATIONS = Number(process.env.MCP_WORKER_CONFIRMATIONS || 3);
 
@@ -193,7 +196,34 @@ for (let i = 1; i <= TRIES; i++) {
     // by a stale isolate. Without it, one lagging colo reported itself as three
     // annotation failures for a defect that had already been fixed — the most
     // confusing possible way to learn about a propagation delay.
-    const smoke = spawnSync("node", ["scripts/remote-smoke.mjs", URL_, version], { stdio: "inherit", cwd: root });
+    // Retry ONLY the transient case. remote-smoke exits 2 when it failed *and* saw a
+    // version other than this one during the run, i.e. a rollout still in progress;
+    // it exits 1 when it failed while consistently serving this build. So a real
+    // contract break fails on the first attempt and is never retried into silence,
+    // while a lagging colo — which produced two consecutive false alarms — resolves
+    // itself.
+    const SMOKE_ATTEMPTS = Number(process.env.MCP_WORKER_SMOKE_ATTEMPTS || 3);
+    let smoke;
+
+    for (let attempt = 1; attempt <= SMOKE_ATTEMPTS; attempt++) {
+      smoke = spawnSync("node", ["scripts/remote-smoke.mjs", URL_, version], { stdio: "inherit", cwd: root });
+
+      if (smoke.status !== 2) break;
+
+      if (attempt < SMOKE_ATTEMPTS) {
+        console.log(
+          `\n↺ the endpoint answered from another version during that run — `
+            + `retrying the contract smoke (${attempt + 1}/${SMOKE_ATTEMPTS})\n`,
+        );
+        await new Promise((r) => setTimeout(r, DELAY * 3));
+      } else {
+        console.error(
+          `\n✖ still being answered by a stale version after ${SMOKE_ATTEMPTS} attempts. `
+            + `The deploy is live; the rollout is unusually slow. Re-check with:\n`
+            + "    MCP_WORKER_VERIFY_ONLY=1 npm run deploy:worker\n",
+        );
+      }
+    }
 
     if (smoke.status !== 0) {
       // Deliberately non-zero, like a failed deploy: the Worker is live and serving
