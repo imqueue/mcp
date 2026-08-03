@@ -140,6 +140,51 @@ The server runs locally, so when `@imqueue/cli` is on PATH it can drive the **re
 - If `imq` is absent, the tools return an install hint and the offline `scaffold_*`
   tools remain available.
 
+## 3a. Tool annotations, and why each is set that way
+
+All four hints the spec defines are set explicitly on all thirteen tools — never
+omitted, never null. `test/annotations.test.ts` asserts that through a real
+`tools/list` call and pins every value in the table below, so a change of judgement
+has to be made deliberately and shows up in a diff as a claim about behaviour.
+
+Two things worth stating because they are easy to read as contradictions:
+
+- **`destructive` and `idempotent` are not opposites.** `cli_install` replaces
+  whatever `imq` was installed, which is destructive; installing the same version
+  twice lands the same binary, so all the destruction happens in the first call and
+  the second adds none.
+- **`openWorld` and `idempotent` answer different questions.** `get_doc` may return
+  different bytes on two calls because the page changed — that is what
+  `openWorldHint: true` says. It still changes nothing by being called twice.
+
+| Tool | read-only | destructive | idempotent | open-world | Justification |
+|---|:--:|:--:|:--:|:--:|---|
+| `search_docs` | ✅ | ❌ | ✅ | ✅ | Fetches public pages from imqueue.org/imqueue.com and ranks them. Reads only; the sites change between calls, so open-world. |
+| `get_doc` | ✅ | ❌ | ✅ | ✅ | Fetches one page's markdown. Host-locked to the two @imqueue domains; refuses anything else. |
+| `list_packages` | ✅ | ❌ | ✅ | ❌ | Renders a catalogue compiled into the build. No network, no filesystem. |
+| `scaffold_service` | ✅ | ❌ | ✅ | ❌ | **Returns source code as text.** Writes no file, creates no project, runs no command — the caller decides whether anything is ever written. `create_service` is the tool that writes. |
+| `scaffold_client` | ✅ | ❌ | ✅ | ❌ | **Returns text**, including the `imq client generate` command as a string. It does not run it. `generate_client` is the tool that does. |
+| `local_install_guide` | ✅ | ❌ | ✅ | ❌ | Returns static setup instructions. Installs nothing — which is why it is not called `install_locally`. |
+| `cli_status` | ✅ | ❌ | ✅ | ❌ | Detects the local `imq` binary and reports its version. |
+| `cli_help` | ✅ | ❌ | ✅ | ❌ | Runs `imq <command> --help`, which prints and exits. |
+| `create_service` | ❌ | ❌ | ❌ | ✅ | Dry-run by default; with `apply: true` it writes a project and may init git, wire CI and push to a remote — hence open-world. Not destructive: it creates rather than damages. **Not idempotent:** a second apply meets a populated directory and can create a second repository. |
+| `generate_client` | ❌ | ❌ | ✅ | ✅ | Introspects a **running** service over its queue (open-world) and overwrites two files at a fixed path. A repeat leaves the same state, so idempotent. |
+| `cli_install` | ❌ | ✅ | ✅ | ✅ | `npm install -g @imqueue/cli` — downloads from the npm registry and **replaces any existing `imq`**, so destructive. Idempotent: see the note above. |
+| `fleet` | ❌ | ✅ | ❌ | ❌ | `imq ctl` over local service repos. `status` is read-only but `stop`/`restart` kill running processes, and a hint describes the tool's **worst case**. Not idempotent: `restart` twice restarts twice, dropping in-flight work each time. |
+| `config` | ❌ | ✅ | ❌ | ❌ | `imq config set` overwrites a value and `init` rewrites the file. Not idempotent because `init` is interactive and a repeat is not guaranteed to be a no-op. |
+| `logs` | ❌ | ✅ | ❌ | ❌ | `dump` reads; `clean` **deletes** the collected logs. Not idempotent: a running fleet writes logs continuously, so a second `clean` deletes *different* data — a client must not auto-retry it. |
+
+The hosted surface is the first eight rows minus the two `cli_*` entries — six tools,
+every one `readOnlyHint: true` and `idempotentHint: true`. Nothing that changes state
+is registered there at all, because a server on Cloudflare's edge cannot reach the
+caller's machine; see §2 and `worker/README.md`.
+
+**On the two `scaffold_*` names.** "Scaffold" means "write files" in most tooling, so
+a reader who stops at the name would conclude `readOnlyHint: true` is wrong. It is
+not — they return strings — but appearance is what a reviewer judges, so both
+descriptions now open with `READ-ONLY: returns … and writes nothing to disk`, and
+each points at the CLI-backed tool that does the real thing.
+
 ## 4. Schemas (zod)
 
 Input:

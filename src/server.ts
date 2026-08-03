@@ -154,22 +154,52 @@ type ToolKind = "read" | "write" | "destructive";
  * (where older clients look), so every client shows a real name.
  *
  * The hints are not decoration — clients use `readOnlyHint` to decide what may run
- * without asking the user, and both public directories require all three to be
- * present AND to match observable behaviour. Understating is the dangerous
- * direction: it reads as mislabelling.
+ * without asking the user, and both public directories require them to be present
+ * AND to match observable behaviour. Understating is the dangerous direction: it
+ * reads as mislabelling.
+ *
+ * THE SPEC DEFINES FOUR HINTS, AND THIS SET THREE. `idempotentHint` was absent from
+ * all thirteen tools — not false, absent — and that is what got v3.1.1 rejected from
+ * the OpenAI plugin directory: "confirm annotations are explicitly set to true or
+ * false (not null) for every tool". A hint a reviewer cannot read is a hint that
+ * does not match behaviour, because it makes no claim at all.
+ *
+ * So the omission is now a compile error rather than an oversight. `read` tools get
+ * `idempotentHint: true` derived, because a tool with no effect on its environment
+ * trivially has no ADDITIONAL effect on a second call. Every tool that changes
+ * something must state its own value — the overloads below will not let it be
+ * skipped — because for those it is a real judgement about whether calling twice
+ * does more than calling once.
  *
  * `openWorld` means the tool touches something outside this process whose state is
  * not ours — a public website, the npm registry, a running service. Reading a
  * catalogue compiled into the build is NOT open-world; fetching a page from
- * imqueue.org is, because the page can change between two identical calls.
+ * imqueue.org is, because the page can change between two identical calls. Note
+ * that open-world and idempotent are independent: `get_doc` may return different
+ * bytes on two calls and still change nothing by being called twice.
  */
-function meta(title: string, kind: ToolKind, openWorld: boolean) {
+function meta(title: string, kind: "read", openWorld: boolean): ToolMeta;
+function meta(title: string, kind: "write" | "destructive", openWorld: boolean, idempotent: boolean): ToolMeta;
+function meta(title: string, kind: ToolKind, openWorld: boolean, idempotent?: boolean): ToolMeta {
   const hints = {
     readOnlyHint: kind === "read",
     destructiveHint: kind === "destructive",
+    idempotentHint: idempotent ?? kind === "read",
     openWorldHint: openWorld,
   };
+
   return { title, annotations: { title, ...hints } };
+}
+
+interface ToolMeta {
+  title: string;
+  annotations: {
+    title: string;
+    readOnlyHint: boolean;
+    destructiveHint: boolean;
+    idempotentHint: boolean;
+    openWorldHint: boolean;
+  };
 }
 
 const methodSchema = z
@@ -424,7 +454,11 @@ function registerSharedTools(server: McpServer): void {
     {
       ...meta("Scaffold an @imqueue service", "read", false), // returns generated source text; writes nothing
       description:
-        "Generate an idiomatic @imqueue/rpc service (an IMQService subclass with @expose()d, JSDoc-typed methods) plus a bootstrap that starts it. Provide the methods you want, or omit them for a starter template. Any non-primitive parameter or return type also gets a types.ts with the required @classType()/@property() declarations — without those the generated client types it `any`, which compiles. Returns source text only — it writes no files.",
+        // Leads with the read-only fact because the NAME does not: \"scaffold\"
+        // means \"write files\" in most tooling, so a reader who stops early would
+        // conclude readOnlyHint: true contradicts what the tool does. It returns
+        // strings; the caller decides whether anything is ever written.
+        "READ-ONLY: returns generated source code as text and writes nothing to disk, creates no project and runs no command. Generates an idiomatic @imqueue/rpc service (an IMQService subclass with @expose()d, JSDoc-typed methods) plus a bootstrap that starts it. Provide the methods you want, or omit them for a starter template. Any non-primitive parameter or return type also gets a types.ts with the required @classType()/@property() declarations — without those the generated client types it `any`, which compiles. Use create_service (local install only) if you want files actually written.",
       inputSchema: {
         name: z.string().describe("Service name, e.g. 'user' or 'UserService'"),
         methods: z.array(methodSchema).optional().describe("Methods to expose"),
@@ -464,7 +498,9 @@ function registerSharedTools(server: McpServer): void {
     {
       ...meta("Scaffold an @imqueue typed client", "read", false), // returns generated source text; writes nothing
       description:
-        "Show how to generate and use the fully-typed client for an @imqueue service. @imqueue generates the real client from a running service (via `imq client generate`), so this returns that command plus an illustrative usage snippet. The generated file exports a single namespace holding the client class, so the import shape is not the obvious one — take it from `namespace` rather than guessing. Returns text only — it writes no files.",
+        // Same reason as scaffold_service: the name suggests writing, the tool
+        // returns text. It does not run the command it prints.
+        "READ-ONLY: returns text and writes nothing to disk, and does NOT run the command it shows you. Explains how to generate and use the fully-typed client for an @imqueue service: @imqueue generates the real client from a running service via `imq client generate`, so this returns that exact command plus an illustrative usage snippet. The generated file exports a single namespace holding the client class, so the import shape is not the obvious one — take it from `namespace` rather than guessing. Use generate_client (local install only) if you want the command actually run.",
       inputSchema: {
         service: z.string().describe("The service to call, e.g. 'user' or 'UserService'"),
         methods: z.array(methodSchema).optional().describe("Known methods (used to shape the example call)"),
@@ -546,7 +582,12 @@ function registerCliTools(server: McpServer, cli: CliHandlers): void {
       // Not "destructive" — it creates a new project rather than damaging an
       // existing one — but it is open-world, because apply=true can configure a
       // VCS remote and push to it.
-      ...meta("Create an @imqueue service with the CLI", "write", true),
+      //
+      // NOT idempotent: a second `apply: true` run does more than the first, not
+      // less. It meets a directory that now has files in it, and it can create a
+      // second remote repository or a second CI pipeline. A client must not retry
+      // this one on its own.
+      ...meta("Create an @imqueue service with the CLI", "write", true, false),
       description:
         "Scaffold a real, provider-wired @imqueue service via `imq service create`. Runs as a DRY-RUN by default: it shows the plan and writes nothing. With apply=true it writes files into the target directory and may initialise git, configure CI and push to a remote. Accepts `imq` flags (cli_help lists them) to avoid interactive prompts. Requires the `imq` CLI.",
       inputSchema: {
@@ -574,7 +615,12 @@ function registerCliTools(server: McpServer, cli: CliHandlers): void {
   server.registerTool(
     "generate_client",
     {
-      ...meta("Generate a typed client with the CLI", "write", true), // introspects a live service over its queue
+      // Introspects a live service over its queue, so open-world. Idempotent: it
+      // overwrites exactly two files at a fixed path, so a second run against the
+      // same service leaves the same state rather than accumulating anything. What
+      // may differ between runs is the service's description, and that is what
+      // openWorldHint says — not this.
+      ...meta("Generate a typed client with the CLI", "write", true, true),
       description:
         "Run `imq client generate <Service>` to emit the real, fully-typed client, writing it into the output directory. The target service must be RUNNING — the CLI introspects the live service over its message queue. Requires the `imq` CLI.",
       inputSchema: {
@@ -597,7 +643,11 @@ function registerCliTools(server: McpServer, cli: CliHandlers): void {
     {
       // Destructive: a global install replaces whatever `imq` is already there.
       // Open-world: it downloads from the npm registry.
-      ...meta("Install the @imqueue CLI", "destructive", true),
+      //
+      // Idempotent even so: installing the same version twice lands the same
+      // binary. The destruction is of whatever was there BEFORE the first call,
+      // and the second call has nothing further to replace.
+      ...meta("Install the @imqueue CLI", "destructive", true, true),
       description:
         "Install @imqueue/cli globally via `npm install -g @imqueue/cli`, replacing any `imq` already installed. cli_status reports whether it is already present. A global install may require a user-writable npm prefix or elevated permissions.",
       inputSchema: {
@@ -618,7 +668,11 @@ function registerCliTools(server: McpServer, cli: CliHandlers): void {
     {
       // `status` is read-only but `stop`/`restart` kill running processes, and the
       // hint describes the worst case the tool accepts.
-      ...meta("Control the local @imqueue services fleet", "destructive", false),
+      //
+      // NOT idempotent, by the same worst-case rule: `start` and `stop` twice are
+      // no-ops, but `restart` twice really does restart twice — new processes, and
+      // in-flight work dropped a second time.
+      ...meta("Control the local @imqueue services fleet", "destructive", false, false),
       description:
         "Run `imq ctl <action>` over a directory of service repositories. `status` reports what is running and changes nothing; `start`, `stop` and `restart` change which processes are running on this machine. Requires the `imq` CLI.",
       inputSchema: {
@@ -644,7 +698,11 @@ function registerCliTools(server: McpServer, cli: CliHandlers): void {
     "config",
     {
       // `set` overwrites an existing value; `init` rewrites the file.
-      ...meta("Manage @imqueue CLI configuration", "destructive", false),
+      //
+      // NOT idempotent on the worst case: `set` with the same value twice changes
+      // nothing the second time, but `init` is interactive and rewrites the file,
+      // so a repeat is not guaranteed to be a no-op.
+      ...meta("Manage @imqueue CLI configuration", "destructive", false, false),
       description:
         "Run `imq config <action>`. `check` = is config initialized; `get [option]` = read a value (or list all); `set option value` = overwrite a value (nested keys use a dot-path, e.g. 'ci.provider'); `init` = interactive setup, which will time out when run non-interactively, so `set` is the automatable one. Requires the `imq` CLI.",
       inputSchema: {
@@ -667,7 +725,13 @@ function registerCliTools(server: McpServer, cli: CliHandlers): void {
     "logs",
     {
       // `clean` deletes the collected logs.
-      ...meta("Read or clean @imqueue fleet logs", "destructive", false),
+      //
+      // NOT idempotent, and this one is worth being careful about. In the abstract a
+      // second `clean` has nothing left to delete — but a running fleet writes logs
+      // continuously, so the second call deletes DIFFERENT data than the first, not
+      // the same data again. A client that auto-retried on the strength of an
+      // idempotent hint could destroy output the user wanted, so the hint is false.
+      ...meta("Read or clean @imqueue fleet logs", "destructive", false, false),
       description:
         "Work with logs of services started by `imq ctl`. action='dump' (default) returns the current combined logs and exits — it never follows/streams, and output is capped. action='clean' deletes the collected log files. Requires the `imq` CLI.",
       inputSchema: {

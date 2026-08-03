@@ -68,11 +68,15 @@ try {
   const noTitle = tools.filter((t) => !t.title && !t.annotations?.title).map((t) => t.name);
   check("every tool has a title", noTitle.length === 0, noTitle.join(", "));
 
-  const HINTS = ["readOnlyHint", "destructiveHint", "openWorldHint"];
+  // FOUR, not three. This list was missing `idempotentHint`, so the hint was absent
+  // from all thirteen tools and this check was green — which is precisely what the
+  // OpenAI directory rejected v3.1.1 for: "confirm annotations are explicitly set to
+  // true or false (not null) for every tool".
+  const HINTS = ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"];
   const badHints = tools
     .filter((t) => HINTS.some((h) => typeof t.annotations?.[h] !== "boolean"))
-    .map((t) => t.name);
-  check("every tool has all three behaviour hints", badHints.length === 0, badHints.join(", "));
+    .map((t) => `${t.name}(${HINTS.filter((h) => typeof t.annotations?.[h] !== "boolean").join(",")})`);
+  check("every tool has all four behaviour hints as booleans", badHints.length === 0, badHints.join(" "));
 
   // The hints must match what the tool does. Spot-check the ones whose value is a
   // judgement call rather than a default, so a careless edit that flips them fails

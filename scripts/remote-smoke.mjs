@@ -177,8 +177,27 @@ try {
   const untitled = tools.filter((t) => !t.title && !t.annotations?.title).map((t) => t.name);
   check("every hosted tool has a title", untitled.length === 0, untitled.join(", "));
 
-  const noOpenWorld = tools.filter((t) => typeof t.annotations?.openWorldHint !== "boolean").map((t) => t.name);
-  check("every hosted tool declares openWorldHint", noOpenWorld.length === 0, noOpenWorld.join(", "));
+  // All FOUR hints the spec defines, each an explicit boolean. This asserted only
+  // openWorldHint and was green while `idempotentHint` was absent from every tool —
+  // the exact reason the OpenAI directory rejected v3.1.1. A hint a reviewer cannot
+  // read makes no claim at all, which is indistinguishable from a wrong one.
+  const HINTS = ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"];
+  const badHints = tools
+    .filter((t) => HINTS.some((h) => typeof t.annotations?.[h] !== "boolean"))
+    .map((t) => `${t.name}(${HINTS.filter((h) => typeof t.annotations?.[h] !== "boolean").join(",")})`);
+  check("every hosted tool sets all four hints to a boolean", badHints.length === 0, badHints.join(" "));
+
+  // Every hosted tool is read-only, so every one of them is idempotent: no effect on
+  // the environment means no ADDITIONAL effect on a second call.
+  const notIdempotent = tools.filter((t) => t.annotations?.idempotentHint !== true).map((t) => t.name);
+  check("every hosted tool is idempotentHint: true", notIdempotent.length === 0, notIdempotent.join(", "));
+
+  // The names say "scaffold", which in most tooling means writing files. If the
+  // description does not correct that immediately, readOnlyHint: true reads as a
+  // mislabelling however true it is.
+  const misleading = ["scaffold_service", "scaffold_client"]
+    .filter((n) => !/^READ-ONLY/.test(tools.find((t) => t.name === n)?.description ?? ""));
+  check("the scaffold tools lead with what they do not do", misleading.length === 0, misleading.join(", "));
 
   // All six promise structured output, which is what lets a client chain
   // search_docs -> get_doc on data rather than on parsed prose, and what clears the
