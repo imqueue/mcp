@@ -191,6 +191,29 @@ Custom Domain under the Worker's **Settings → Domains**.
   There is no per-user identity to collect: the server is stateless and cookieless,
   so `client_id` is a stable label for a client *family* (`mcp.claude-code`), and
   every user of one client shares it.
+- **Re-verify without redeploying.** `wrangler deploy` accepting an upload is not the
+  same as every colo serving it: for a short window after a deploy, two versions
+  answer the same hostname. So the deploy step now requires **three consecutive**
+  probes reporting the new version before it runs the contract smoke, and passes the
+  expected version to `remote-smoke.mjs` so being answered by a lagging isolate says
+  so instead of looking like a contract failure. If you need to check what is live
+  right now:
+
+  ```bash
+  MCP_WORKER_VERIFY_ONLY=1 npm run deploy:worker   # propagation + full contract, no deploy
+  ```
+
+  This is what to run after a `postpublish` failure, before deciding whether to fix
+  forward or `npx wrangler rollback`. 3.2.1 is why it exists: the deploy succeeded,
+  one smoke request landed on the previous version, and the only way to re-check was
+  to deploy again.
+- **A failure in one postpublish step no longer cancels the others.** `postpublish`
+  runs `scripts/postpublish.mjs`, which runs the Worker deploy, the MCP registry
+  publish and the GitHub Release **all three**, then reports and exits non-zero if
+  any failed. It used to chain them with `&&`, which let the strictest step (the
+  deploy, which exits non-zero by design) silently skip the two that describe
+  themselves as cosmetic — so a release could reach npm with a registry record
+  pointing at the old version and no release notes.
 - **The Worker is a separate artifact from the npm package** — it is bundled from
   `worker/worker.ts` + `src/`, while the tarball builds `src/` only. That is why
   the deploy needs its own trigger: before it was automated the hosted endpoint

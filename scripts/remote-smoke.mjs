@@ -12,6 +12,16 @@
 // mode again — the endpoint would still work, so only an assertion catches it, and
 // by then the listing says something false about what the server can do.
 const target = process.argv[2] ?? "https://mcp.imqueue.org/mcp";
+/**
+ * Optional expected server version, passed by deploy-worker.mjs.
+ *
+ * Cloudflare rolls a new Worker out across colos, so for a short window two versions
+ * answer the same hostname. Without this, being answered by a lagging isolate looks
+ * like a contract failure: 3.2.1's deploy smoke reported three annotation failures
+ * for a defect that was already fixed, because that one request landed on 3.2.0.
+ * Naming the mismatch turns a mystery into a one-line diagnosis.
+ */
+const expectVersion = process.argv[3];
 const origin = new URL(target).origin;
 
 const ok = (c) => (c ? "✅" : "❌");
@@ -146,6 +156,21 @@ try {
     clientInfo: { name: "remote-smoke", version: "0" },
   });
   check("initialize", init?.serverInfo?.name === "imqueue", `${init?.serverInfo?.name} ${init?.serverInfo?.version ?? ""}`);
+
+  // Before anything else is judged, establish WHICH build answered. Every assertion
+  // below is about the contract of a specific version, so if this is the wrong one
+  // the rest of the run is describing code nobody is asking about.
+  if (expectVersion) {
+    const live = init?.serverInfo?.version;
+
+    check(
+      `serving the expected version ${expectVersion}`,
+      live === expectVersion,
+      live === expectVersion
+        ? live
+        : `got ${live} — a colo is still rolling out, so any failure below may be stale; re-run in a moment`,
+    );
+  }
 
   // The only server-controlled text that reaches the host model's SYSTEM PROMPT.
   // It shipped absent for three releases and nothing noticed, because a server

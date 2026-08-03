@@ -46,6 +46,20 @@ const isPrerelease = version.includes("-"); // e.g. 2.1.0-beta.1
 const URL_ = process.env.MCP_WORKER_URL || "https://mcp.imqueue.org/mcp";
 const TRIES = Number(process.env.MCP_WORKER_TRIES || 20);
 const DELAY = Number(process.env.MCP_WORKER_DELAY_MS || 3000);
+/**
+ * How many CONSECUTIVE probes must report the new version before it counts as
+ * deployed.
+ *
+ * One is not enough, and this cost a release: 3.2.1's deploy was accepted on the
+ * first matching probe, then remote-smoke — running seconds later — got answered by
+ * an isolate still on 3.2.0 and reported three annotation failures that had already
+ * been fixed. Cloudflare rolls a new version out across colos, so for a short window
+ * two versions answer the same hostname and a single probe is a coin toss.
+ *
+ * Three in a row, spaced by DELAY, is cheap (a few seconds on an already-slow step)
+ * and turns "probably propagated" into "propagated everywhere this client can reach".
+ */
+const CONFIRMATIONS = Number(process.env.MCP_WORKER_CONFIRMATIONS || 3);
 
 const skip = (why) => {
   console.warn(`\n⚠  Worker deploy skipped — ${why}.`);
@@ -65,26 +79,45 @@ const fail = (msg) => {
 };
 
 if (process.env.MCP_WORKER_SKIP) skip("MCP_WORKER_SKIP is set");
+
+/**
+ * Verify a deploy that already happened, without deploying again.
+ *
+ * Born from 3.2.1: the upload succeeded, the smoke test was answered by a colo still
+ * serving the previous version, and this script exited 1. The right next move was to
+ * re-check — but the only way to re-check was to redeploy, which is a heavier action
+ * than the situation called for. `MCP_WORKER_VERIFY_ONLY=1 npm run deploy:worker`
+ * now re-runs the propagation check and the contract smoke against what is already
+ * live.
+ */
+const verifyOnly = Boolean(process.env.MCP_WORKER_VERIFY_ONLY);
 // Pre-releases must not take over the production endpoint; ship them by hand.
 if (isPrerelease) skip(`${version} is a pre-release`);
 
-console.log(`\nDeploying the hosted MCP server (${version}) to Cloudflare…`);
+if (verifyOnly) {
+  console.log(`\nVERIFY ONLY — not deploying. Checking what ${URL_} already serves.`);
+} else {
+  console.log(`\nDeploying the hosted MCP server (${version}) to Cloudflare…`);
 
-// Type-check first: the same gate worker/README.md tells a human to run. The
-// Worker has its own tsconfig and is NOT covered by `prepublishOnly`'s build.
-console.log("→ npm run typecheck:worker");
-if (spawnSync("npm", ["run", "typecheck:worker"], { stdio: "inherit", cwd: root }).status !== 0) {
-  fail("the Worker does not type-check (nothing was deployed)");
-}
+  // Type-check first: the same gate worker/README.md tells a human to run. The
+  // Worker has its own tsconfig and is NOT covered by `prepublishOnly`'s build.
+  console.log("→ npm run typecheck:worker");
+  if (spawnSync("npm", ["run", "typecheck:worker"], { stdio: "inherit", cwd: root }).status !== 0) {
+    fail("the Worker does not type-check (nothing was deployed)");
+  }
 
-console.log("→ npx wrangler deploy");
-const deploy = spawnSync("npx", ["wrangler", "deploy"], { stdio: "inherit", cwd: root });
-if (deploy.error) fail(`could not run wrangler (${deploy.error.message})`);
-if (deploy.status !== 0) {
-  fail(
-    `\`wrangler deploy\` exited ${deploy.status} — if it complains about ` +
-      `authentication, run \`npx wrangler login\``,
-  );
+  console.log("→ npx wrangler deploy");
+
+  const deploy = spawnSync("npx", ["wrangler", "deploy"], { stdio: "inherit", cwd: root });
+
+  if (deploy.error) fail(`could not run wrangler (${deploy.error.message})`);
+
+  if (deploy.status !== 0) {
+    fail(
+      `\`wrangler deploy\` exited ${deploy.status} — if it complains about ` +
+        `authentication, run \`npx wrangler login\``,
+    );
+  }
 }
 
 // A green `wrangler deploy` is NOT proof the endpoint moved: it means Cloudflare
@@ -116,7 +149,8 @@ const liveVersion = async () => {
   return JSON.parse(framed ? framed[1] : text)?.result?.serverInfo?.version;
 };
 
-console.log(`\nVerifying ${URL_} serves ${version}…`);
+console.log(`\nVerifying ${URL_} serves ${version} (${CONFIRMATIONS} consecutive probes)…`);
+let streak = 0;
 for (let i = 1; i <= TRIES; i++) {
   let live;
   try {
@@ -124,6 +158,25 @@ for (let i = 1; i <= TRIES; i++) {
   } catch (e) {
     live = `no response (${e.message})`;
   }
+
+  // A single match is not propagation — see CONFIRMATIONS. Any non-match resets
+  // the streak, so a colo still serving the old version cannot be averaged away.
+  if (live === version) {
+    streak += 1;
+
+    if (streak < CONFIRMATIONS) {
+      console.log(`  confirming… ${streak}/${CONFIRMATIONS} (${i}/${TRIES})`);
+      await new Promise((r) => setTimeout(r, DELAY));
+      continue;
+    }
+  } else {
+    if (streak > 0) {
+      console.log(`  ↺ streak reset: got '${live}' after ${streak} match(es) — still rolling out`);
+    }
+
+    streak = 0;
+  }
+
   if (live === version) {
     console.log(`✔ ${URL_} is live on ${version} (attempt ${i})\n`);
 
@@ -136,7 +189,11 @@ for (let i = 1; i <= TRIES; i++) {
     // it anywhere.
     console.log("→ node scripts/remote-smoke.mjs (contract, not just version)");
 
-    const smoke = spawnSync("node", ["scripts/remote-smoke.mjs", URL_], { stdio: "inherit", cwd: root });
+    // The expected version is passed so the smoke can SAY when it has been answered
+    // by a stale isolate. Without it, one lagging colo reported itself as three
+    // annotation failures for a defect that had already been fixed — the most
+    // confusing possible way to learn about a propagation delay.
+    const smoke = spawnSync("node", ["scripts/remote-smoke.mjs", URL_, version], { stdio: "inherit", cwd: root });
 
     if (smoke.status !== 0) {
       // Deliberately non-zero, like a failed deploy: the Worker is live and serving
