@@ -131,9 +131,14 @@ try {
   // the same thing the prose does — the whole point of rendering the markdown from
   // the structure is that the two cannot drift.
   const svcData = svc.result?.structuredContent;
+  // Three files, because `returns: "User"` is a complex type: the class, the
+  // @classType()/@property() declarations it needs, and the bootstrap. Emitting a
+  // signature that names an undeclared type was the original defect — it did not
+  // compile, and once the caller declared `User` themselves the generated client
+  // typed it `any`, which does.
   check(
     "scaffold_service returns structuredContent",
-    svcData?.service === "UserService" && Array.isArray(svcData?.files) && svcData.files.length === 2,
+    svcData?.service === "UserService" && Array.isArray(svcData?.files) && svcData.files.length === 3,
     svcData ? `service=${svcData.service} files=${svcData.files?.length}` : "absent",
   );
   const svcFile = svcData?.files?.find((f) => f.path === "UserService.ts");
@@ -142,9 +147,42 @@ try {
     !!svcFile && svcFile.content.includes("@expose()") && svcData.files.some((f) => f.path === "index.ts"),
     svcData?.files?.map((f) => f.path).join(", "),
   );
+  const typesFile = svcData?.files?.find((f) => f.path === "types.ts");
+  check(
+    "a complex return type comes with its @classType() declaration",
+    !!typesFile
+      && typesFile.content.includes("@classType()")
+      && typesFile.content.includes("export class User")
+      && svcFile?.content.includes("import { User } from './types.js';")
+      && JSON.stringify(svcData?.types) === JSON.stringify(["User"]),
+    svcData?.types?.join(", ") ?? "types absent",
+  );
   check(
     "text and structure agree",
     !!svcFile && svcText.includes(svcFile.content) && svcText.includes(svcData.cliAlternative),
+  );
+
+  // The client idiom, end to end. All three of these were wrong at once — the
+  // command addressed a queue nobody serves, the output path was named after the
+  // client instead of the service, and the example imported a symbol the
+  // generated module does not export.
+  const cl = await rpc(10, "tools/call", { name: "scaffold_client", arguments: { service: "user" } });
+  const clData = cl.result?.structuredContent;
+  const clText = cl.result?.content?.[0]?.text ?? "";
+  check(
+    "scaffold_client generates against the service class, into the service file",
+    clData?.generateCommand === "imq client generate UserService ./src/clients"
+      && clData?.output === "./src/clients/UserService.ts"
+      && clData?.client === "UserClient"
+      && clData?.namespace === "userService",
+    `${clData?.generateCommand} -> ${clData?.output}`,
+  );
+  check(
+    "scaffold_client's example uses the namespace the generated file exports",
+    clData?.example?.content?.includes("import { userService } from './src/clients/UserService.js';")
+      && clData?.example?.content?.includes("new userService.UserClient(")
+      && !/import\s*\{\s*UserClient\s*\}/.test(clText),
+    clData?.example?.content?.split("\n")[0] ?? "absent",
   );
 
   const pkgs = await rpc(4, "tools/call", { name: "list_packages", arguments: {} });

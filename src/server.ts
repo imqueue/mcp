@@ -389,7 +389,7 @@ function registerSharedTools(server: McpServer): void {
     {
       ...meta("Scaffold an @imqueue service", "read", false), // returns generated source text; writes nothing
       description:
-        "Generate an idiomatic @imqueue/rpc service (an IMQService subclass with @expose()d, JSDoc-typed methods) plus a bootstrap that starts it. Provide the methods you want, or omit them for a starter template. Returns source text only — it writes no files.",
+        "Generate an idiomatic @imqueue/rpc service (an IMQService subclass with @expose()d, JSDoc-typed methods) plus a bootstrap that starts it. Provide the methods you want, or omit them for a starter template. Any non-primitive parameter or return type also gets a types.ts with the required @classType()/@property() declarations — without those the generated client types it `any`, which compiles. Returns source text only — it writes no files.",
       inputSchema: {
         name: z.string().describe("Service name, e.g. 'user' or 'UserService'"),
         methods: z.array(methodSchema).optional().describe("Methods to expose"),
@@ -406,6 +406,11 @@ function registerSharedTools(server: McpServer): void {
             content: z.string(),
           }),
         ),
+        types: z
+          .array(z.string())
+          .describe(
+            "Complex types the signatures refer to. Each needs @classType() on the class and @property() on every field — types.ts declares them; complete the fields. Empty when every type is a primitive.",
+          ),
         cliAlternative: z.string().describe("The CLI command that creates a full provider-wired project instead"),
       },
     },
@@ -424,7 +429,7 @@ function registerSharedTools(server: McpServer): void {
     {
       ...meta("Scaffold an @imqueue typed client", "read", false), // returns generated source text; writes nothing
       description:
-        "Show how to generate and use the fully-typed client for an @imqueue service. @imqueue generates the real client from a running service (via `imq client generate`), so this returns that command plus an illustrative usage snippet. Returns text only — it writes no files.",
+        "Show how to generate and use the fully-typed client for an @imqueue service. @imqueue generates the real client from a running service (via `imq client generate`), so this returns that command plus an illustrative usage snippet. The generated file exports a single namespace holding the client class, so the import shape is not the obvious one — take it from `namespace` rather than guessing. Returns text only — it writes no files.",
       inputSchema: {
         service: z.string().describe("The service to call, e.g. 'user' or 'UserService'"),
         methods: z.array(methodSchema).optional().describe("Known methods (used to shape the example call)"),
@@ -435,8 +440,13 @@ function registerSharedTools(server: McpServer): void {
       outputSchema: {
         service: z.string(),
         client: z.string().describe("Generated client class name"),
+        namespace: z
+          .string()
+          .describe(
+            "The ONLY export of the generated file: a namespace holding the client class. Import this, then `new <namespace>.<client>()` — importing the class directly does not resolve.",
+          ),
         generateCommand: z.string().describe("Run against the RUNNING service to emit the real typed client"),
-        output: z.string().describe("Where that command writes the client"),
+        output: z.string().describe("The file that command writes (a compiled .js lands beside it)"),
         example: z
           .object({ language: z.string(), content: z.string() })
           .describe("An illustrative call — not a file to write"),
