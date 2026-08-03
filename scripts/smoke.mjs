@@ -43,6 +43,12 @@ try {
   });
   check("initialize", init.result?.serverInfo?.name === "imqueue", init.result?.serverInfo?.name);
 
+  // Instructions reach the host model's system prompt, and a server without them
+  // still works — which is why their absence went unnoticed for three releases.
+  const instructions = init.result?.instructions ?? "";
+  check("initialize returns instructions", instructions.length > 0, `${instructions.length} chars`);
+  check("serverInfo carries a display title", init.result?.serverInfo?.title === "@imqueue", init.result?.serverInfo?.title ?? "absent");
+
   send({ jsonrpc: "2.0", method: "notifications/initialized" });
 
   const list = await rpc(2, "tools/list", {});

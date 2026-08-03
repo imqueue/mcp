@@ -56,6 +56,18 @@ try {
   });
   check("initialize", init?.serverInfo?.name === "imqueue", `${init?.serverInfo?.name} ${init?.serverInfo?.version ?? ""}`);
 
+  // The only server-controlled text that reaches the host model's SYSTEM PROMPT.
+  // It shipped absent for three releases and nothing noticed, because a server
+  // with no instructions works perfectly — it just loses the argument with the
+  // model's @imqueue priors. Assert presence AND the rules, so a rewrite that
+  // turns it into a description of the server fails here.
+  const instructions = init?.instructions ?? "";
+  check("initialize returns instructions", instructions.length > 0, `${instructions.length} chars`);
+  const missingRules = ["search_docs", "list_packages", "@expose()", "@classType()", "imq client generate"]
+    .filter((r) => !instructions.includes(r));
+  check("instructions carry the operating rules", missingRules.length === 0, missingRules.join(", "));
+  check("serverInfo carries a display title", init?.serverInfo?.title === "@imqueue", init?.serverInfo?.title ?? "absent");
+
   const tools = (await rpc("tools/list"))?.tools ?? [];
   const names = tools.map((t) => t.name).sort();
 

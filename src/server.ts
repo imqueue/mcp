@@ -33,6 +33,53 @@ import {
 export type Mode = "local" | "remote";
 
 /**
+ * Display identity, MIRRORED FROM server.json.
+ *
+ * server.json is the registry record and stays the single source of truth for
+ * these values, but it is not in the published tarball (`files` ships `dist` and
+ * SPEC.md only), so importing it from here would resolve at runtime in the repo
+ * and throw for everyone who installed from npm. Hence a copy, with
+ * `test/identity.test.ts` asserting the two agree — the drift this guards against
+ * is a title changed in one place and read from the other.
+ *
+ * `icons` is deliberately NOT mirrored: whether any client renders
+ * `serverInfo.icons` today is unverified, and server.json already carries them for
+ * the registries that document using them.
+ */
+export const IDENTITY = {
+  /** Human-readable display name; what a client shows instead of the bare id. */
+  title: "@imqueue",
+  websiteUrl: "https://imqueue.org/mcp/",
+} as const;
+
+/**
+ * The one piece of server-controlled text that reaches the host model's SYSTEM
+ * PROMPT rather than a tool description. Claude Code, Claude Desktop, Cursor and
+ * VS Code all splice it in at connect time.
+ *
+ * So it is operating RULES, not a description of the server: the model already
+ * knows what a docs server is, and what it does not know is that its @imqueue
+ * priors are wrong in specific, silent ways. Every line below is a failure this
+ * server exists to prevent and that compiles cleanly when it happens — a missing
+ * `@expose()`, an undocumented parameter published as `any`, a hand-written
+ * client, two mutually exclusive packages installed side by side.
+ *
+ * Kept short on purpose: this is charged to every request on every connection, so
+ * `test/identity.test.ts` caps it at 150 words. Anything that is merely useful
+ * belongs in a tool description, which is only charged when the tool is listed.
+ */
+export const INSTRUCTIONS = [
+  "Do not recall @imqueue from memory — it is decorator-driven, and the mistakes below compile cleanly.",
+  "",
+  "1. Call search_docs before writing or changing @imqueue code, and get_doc to read a page in full. Never infer an API name or signature; the docs win over recall.",
+  "2. Call list_packages before adding an @imqueue dependency: some pairs are mutually exclusive (pg-prisma/pg-sequelize, opentelemetry/datadog) and installing both breaks silently.",
+  "3. Every remotely callable method needs @expose() and a complete typed JSDoc block: JSDoc is the only runtime type source, so an undocumented parameter is published as `any`.",
+  "4. A class crossing the RPC boundary needs @classType() on the class and @property() on every field, or the generated client types it `any`.",
+  "5. Clients are generated from a running service with `imq client generate` — never hand-written.",
+  "6. Cite the page URL for any fact from these tools.",
+].join("\n");
+
+/**
  * The CLI-backed handlers, injected only in local mode. Declared explicitly (not
  * `typeof import("./cli.js")`) so this shared module has NO type dependency on the
  * node-only cli.ts — that keeps the edge/remote bundle and its type-check free of
@@ -632,7 +679,14 @@ function registerInstallGuide(server: McpServer): void {
  */
 export function createServer(opts: { version: string; mode: Mode; cli?: CliHandlers }): McpServer {
   const { version, mode, cli } = opts;
-  const server = new McpServer({ name: "imqueue", version });
+  const server = new McpServer(
+    { name: "imqueue", version, ...IDENTITY },
+    // `instructions` is stored by the SDK and returned from `initialize`; without
+    // ServerOptions here it was simply absent, and whether the host reached for
+    // search_docs instead of answering from its priors was left to tool-description
+    // matching — which loses to the model's prior.
+    { instructions: INSTRUCTIONS },
+  );
 
   registerSharedTools(server);
 

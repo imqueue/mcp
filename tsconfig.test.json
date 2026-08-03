@@ -1,0 +1,12 @@
+// Type-checks the unit tests, which the main build deliberately does not see:
+// tsconfig.json sets rootDir to src so `npm run build` cannot emit test files
+// into dist. Without this, a test could reference a symbol that no longer exists
+// and still run green under tsx, which strips types rather than checking them.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}
