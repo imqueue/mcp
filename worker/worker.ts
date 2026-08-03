@@ -17,9 +17,11 @@ const version = (pkg as { version: string }).version;
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Mcp-Session-Id, Mcp-Protocol-Version, Authorization",
-  "Access-Control-Expose-Headers": "Mcp-Session-Id",
+  // POST only, matching what /mcp answers. GET and DELETE were advertised and are
+  // now refused, and this server is stateless — `sessionIdGenerator: undefined`, so
+  // it never issues an Mcp-Session-Id and had no business exposing the header.
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Mcp-Protocol-Version, Authorization",
 };
 
 /** Worker bindings. `OPENAI_APPS_CHALLENGE` is a secret, set out of band. */
@@ -92,14 +94,50 @@ export default {
     }
 
     // Friendly landing page at the root for humans hitting it in a browser.
-    if (request.method === "GET" && url.pathname === "/") {
-      return new Response(LANDING, {
-        headers: { "content-type": "text/plain; charset=utf-8", ...CORS },
-      });
+    //
+    // HEAD is answered here too: it was falling through to the MCP handler, which
+    // is an RFC 9110 violation (HEAD must behave as GET without a body) and is what
+    // registry validators and uptime probes send. A Response built with a null body
+    // is the correct way to answer it.
+    if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/") {
+      const headers = { "content-type": "text/plain; charset=utf-8", ...CORS };
+
+      return new Response(request.method === "HEAD" ? null : LANDING, { headers });
     }
 
     // MCP endpoint. Accept /mcp, and also / for clients that omit the path.
     if (url.pathname === "/mcp" || url.pathname === "/") {
+      // Non-POST is refused BEFORE the transport sees it.
+      //
+      // `GET /mcp` with an SSE accept header returned 200 and an empty stream,
+      // which the SDK client treats as a clean EOF: `_scheduleReconnection(…, 0)`
+      // resets attemptCount on every one, so maxRetries is never reached and the
+      // client reconnects at roughly 1/s forever. Nothing user-visible breaks —
+      // no onerror fires and tool calls are unaffected — which is exactly why it
+      // went unnoticed at ~74k requests/day/client. DELETE returned 200 as well.
+      //
+      // 405 is the one status client/streamableHttp.js treats as a clean no-op, so
+      // a client that opens the stream out of habit stops instead of looping. This
+      // server speaks several protocol revisions rather than only the newest, so
+      // the spec's GET/DELETE→405 rule is a SHOULD here, not a MUST — but the
+      // alternative on offer is a permanent poll for a stream that carries nothing.
+      if (request.method !== "POST") {
+        return new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            error: {
+              code: -32000,
+              message: `${request.method} is not supported on ${url.pathname}. This server is stateless: POST a JSON-RPC request.`,
+            },
+            id: null,
+          }),
+          {
+            status: 405,
+            headers: { "content-type": "application/json", allow: "POST, OPTIONS", ...CORS },
+          },
+        );
+      }
+
       return handleMcp(request);
     }
 

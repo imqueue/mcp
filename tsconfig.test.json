@@ -1,12 +1,20 @@
 // Type-checks the unit tests, which the main build deliberately does not see:
-// tsconfig.json sets rootDir to src so `npm run build` cannot emit test files
-// into dist. Without this, a test could reference a symbol that no longer exists
-// and still run green under tsx, which strips types rather than checking them.
+// tsconfig.json sets rootDir to src so `npm run build` cannot emit test files into
+// dist. Without this, a test could reference a symbol that no longer exists and
+// still run green under tsx, which strips types rather than checking them.
+//
+// Bundler resolution rather than the root's NodeNext, because the tests also import
+// worker/worker.ts — which is loaded by esbuild via wrangler, not by node, and
+// imports package.json without an import attribute. NodeNext's stricter rules still
+// apply where they matter: `npm run build` checks src/ under them, and
+// `npm run typecheck:worker` checks the Worker under its own config.
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
-    "rootDir": "."
+    "rootDir": ".",
+    "module": "ESNext",
+    "moduleResolution": "Bundler"
   },
   "include": ["src/**/*.ts", "test/**/*.ts"]
 }
