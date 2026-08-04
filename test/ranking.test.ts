@@ -265,3 +265,16 @@ test("an empty query returns the curated index rather than nothing", () => {
 
   assert.deepEqual(urls(rankEntries(curated, [], "   ", 3)), ["https://imqueue.org/get-started/"]);
 });
+
+test("one summary term is still not enough to outrank a whole-name match", () => {
+  // The other side of the same change: accumulating summary hits must not let a
+  // page that merely mentions a word beat the symbol the query actually named.
+  const symbols = [
+    sym("IMQOptions.safeDelivery", "core", "property", "Enable guaranteed message delivery."),
+    sym("RedisQueue.send", "core", "method", "Sends a given message to a given queue, with delivery."),
+  ];
+
+  const got = urls(rankEntries([], symbols, "safeDelivery"));
+
+  assert.ok(got[0]?.includes("imqoptions.safedelivery/"), got.join(" | "));
+});
