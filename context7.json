@@ -13,5 +13,7 @@
     "Never hand-write an @imqueue client. `imq client generate <ServiceClassName> <dir>` writes <dir>/<ServiceClassName>.ts, whose only export is a namespace named after the service with a lowercase first letter, holding a class whose trailing `Service` is replaced by `Client` — so a UserService gives `import { userService } from './clients/UserService.js'` and `new userService.UserClient()`. The name passed to the CLI is the service's class name because that is its queue name. Call scaffold_client for the exact command and import for a given service.",
     "Every remotely callable method needs @expose() and a complete typed JSDoc block: JSDoc is the only type source that survives to runtime, so an undocumented parameter is published as `any`. A class that crosses the RPC boundary needs @classType() on the class and @property() on every field, or the generated client types it `any`. Both omissions compile cleanly. Consuming projects must build with `removeComments: false`.",
     "See the install matrix and tool reference at imqueue.org/mcp/."
-  ]
+  ],
+  "url": "https://context7.com/imqueue/mcp",
+  "public_key": "pk_fjNtG1ue4XLAYwKYgyOMq"
 }
