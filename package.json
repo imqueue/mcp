@@ -35,10 +35,11 @@
     "node": ">=18"
   },
   "scripts": {
-    "build": "tsc",
+    "ranker": "node scripts/copy-ranker.mjs",
+    "build": "npm run ranker && tsc",
     "start": "node dist/index.js",
-    "dev": "tsx src/index.ts",
-    "test": "tsx --test test/*.test.ts",
+    "dev": "npm run ranker && tsx src/index.ts",
+    "test": "npm run ranker && tsx --test test/*.test.ts",
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
     "verify": "npm run build && npm run typecheck:worker && npm run typecheck:test && npm test && npm run smoke",
     "smoke": "node scripts/smoke.mjs",
@@ -46,9 +47,9 @@
     "version": "node scripts/sync-version.mjs && git add server.json",
     "prepublishOnly": "npm run verify",
     "postpublish": "node scripts/postpublish.mjs",
-    "typecheck:worker": "tsc --noEmit -p worker/tsconfig.json",
-    "dev:worker": "wrangler dev",
-    "deploy:worker": "wrangler deploy"
+    "typecheck:worker": "npm run ranker && tsc --noEmit -p worker/tsconfig.json",
+    "dev:worker": "npm run ranker && wrangler dev",
+    "deploy:worker": "npm run ranker && wrangler deploy"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",

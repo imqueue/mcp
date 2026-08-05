@@ -1,17 +1,42 @@
 // Docs access for the @imqueue MCP server.
 //
 // The docs live on imqueue.org as machine-readable feeds:
-//   * /llms.txt              — curated index: `## Section` + `- [Title](url): description`
-//   * /api/search-index.json — every exported symbol of the current majors:
-//                              [{ name, kind, package, url, summary, deprecated? }]
-//   * /<page-url>index.md    — a plain-markdown mirror of every page (also <page>.md)
-//   * /blog/search-index.json — [{ title, url, summary, topics, ... }]
+//   * /search-index.json      every page, API symbol and question-shaped section
+//   * /search-text.json       the prose corpus at heading-section granularity
+//   * /search-peer-index.json the same two shapes for imqueue.com, copied onto
+//   * /search-peer-text.json  imqueue.org's origin at build time
+//   * /llms.txt               curated index: `## Section` + `- [Title](url): description`
+//   * /<page-url>index.md     a plain-markdown mirror of every page (also <page>.md)
+//
+// THE RANKING IS NOT IMPLEMENTED HERE ANY MORE. Those first four feeds are exactly
+// what the website's own search box reads, and src/ranker.ts is the same code, pinned
+// as a submodule to the same commit imqueue.com pins. This server used to carry its
+// own ranker over its own feed, and the two answered the same question differently:
+// measured over 3,657 agent-shaped queries, the website's ranker returned a correct
+// result in the top 6 for 99.5% of them against this server's 83.9%, and there was no
+// query the old ranker answered that the new one does not. Nothing had ever compared
+// them, which is how a 15-point gap survives.
+//
+// llms.txt stays, and is now used for one thing: the human-written `section` label a
+// caller reads. It is the only place that text exists.
 //
 // imqueue.com serves the same shapes for the commercial edition — licensing, pricing
-// and support, which the framework docs deliberately do not cover.
+// and support, which the framework docs deliberately do not cover. Note the peer feeds
+// are fetched from **imqueue.org**, not from imqueue.com: the website copies them
+// across at build time so its own search never makes a cross-origin request, and
+// reading them from one origin means one host to be reachable instead of two.
 //
 // We fetch these at runtime (so the server never ships stale copies) and cache them
 // in-process. Only those two hosts are ever fetched.
+
+import {
+  assertFeedVersion,
+  ranker,
+  sectionText,
+  type Hit,
+  type RankerIndex,
+  type RankerSectionIndex,
+} from "./ranker.js";
 
 const SITE = "https://imqueue.org";
 /**
@@ -45,18 +70,7 @@ export interface DocEntry {
   symbol?: boolean;
 }
 
-/** One record of /api/search-index.json. */
-interface ApiSymbol {
-  name: string;
-  url: string;
-  kind?: string;
-  package?: string;
-  summary?: string;
-  deprecated?: boolean;
-}
-
 let indexCache: { at: number; entries: DocEntry[] } | null = null;
-let apiCache: { at: number; entries: DocEntry[] } | null = null;
 
 /**
  * How long any single upstream fetch may take.
@@ -168,7 +182,7 @@ export async function loadIndex(): Promise<DocEntry[]> {
   } catch (e) {
     // A usable copy may be sitting in the cache past its TTL. Telling the caller
     // "cannot search the docs" while holding one is the worst of both outcomes —
-    // and unlike loadApiIndex, which has always degraded gracefully, this threw.
+    // this used to throw. `loadCorpus` degrades the same way, for the same reason.
     if (indexCache) return indexCache.entries;
 
     throw new Error(
@@ -203,233 +217,115 @@ export async function loadIndex(): Promise<DocEntry[]> {
 }
 
 /**
- * Fetch + parse /api/search-index.json into doc entries (cached).
+ * The four search feeds, prepared for the ranker.
  *
- * llms.txt lists only the two package indexes, so without this feed a query for
- * a symbol name — the most natural thing to search for — matches nothing at all.
- * A missing or unreachable feed is not fatal: the curated index on its own still
- * answers how-to questions, so this degrades to the previous behaviour.
+ * `prepare()` and `prepareSections()` annotate their argument IN PLACE and return it,
+ * so what is cached here is the prepared object itself. That is also what makes the
+ * caching worth doing: preparing tier 2 folds and counts ~640 kB of prose, measured at
+ * 46.6 ms, which is most of a cold isolate's budget.
  */
-export async function loadApiIndex(): Promise<DocEntry[]> {
-  if (apiCache && Date.now() - apiCache.at < TTL_MS) return apiCache.entries;
-
-  let entries: DocEntry[] = [];
-
-  try {
-    const res = await get(`${SITE}/api/search-index.json`);
-
-    if (res.ok) {
-      const raw: unknown = await res.json();
-
-      entries = (Array.isArray(raw) ? (raw as ApiSymbol[]) : [])
-        .filter((s) => s && typeof s.name === "string" && typeof s.url === "string")
-        .map((s) => ({
-          title: s.name,
-          url: `${SITE}${s.url}`,
-          // The deprecation marker leads, so an agent scanning results sees it
-          // before it copies the symbol into code.
-          description: s.deprecated
-            ? `DEPRECATED — do not use in new code. ${s.summary || ""}`.trim()
-            : s.summary || "",
-          section: `API · ${s.package || "@imqueue"}${s.kind ? ` ${s.kind}` : ""}`,
-          symbol: true,
-        }));
-    }
-  } catch {
-    // Offline, or the feed is not deployed yet — searchDocs carries on without it.
-  }
-
-  // Only replace a good cache with a good result. This used to assign
-  // unconditionally, so ONE transient failure past the TTL emptied the symbol index
-  // for the next hour — 1,152 symbols silently unsearchable, and search_docs still
-  // answering successfully with prose only, which is the hardest kind of outage to
-  // notice.
-  if (!entries.length && apiCache?.entries.length) return apiCache.entries;
-
-  apiCache = { at: Date.now(), entries };
-
-  return entries;
+export interface Corpus {
+  at: number;
+  index: RankerIndex;
+  text: RankerSectionIndex;
+  /** imqueue.com's two tiers. Null when the peer feeds are absent — see loadCorpus. */
+  peerIndex: RankerIndex | null;
+  peerText: RankerSectionIndex | null;
 }
 
-const STOP = new Set([
-  "the", "a", "an", "and", "or", "of", "to", "in", "for", "on", "with",
-  "is", "are", "how", "do", "does", "i", "my", "me", "it", "that", "this",
-  // Empty verbs and fillers that a spoken question carries and a title does not
-  // mean: "how do I GET a typed client" must not match `ICache.get`, and "how do
-  // I USE x" must not match every `useX`.
-  "get", "use", "using", "need", "want", "real", "from", "by",
-  "you", "your", "we", "as", "at", "if", "than", "then", "there",
-]);
+let corpusCache: Corpus | null = null;
+/**
+ * De-duplicates concurrent loads. Nearly a megabyte of JSON, so two tool calls
+ * arriving together on a cold isolate would otherwise both fetch and both prepare it.
+ */
+let corpusInFlight: Promise<Corpus> | null = null;
 
-function tokenize(s: string): string[] {
-  const out = new Set<string>();
+async function feed(path: string, optional: boolean): Promise<unknown> {
+  const res = await get(`${SITE}${path}`);
 
-  for (const token of s.toLowerCase().split(/[^a-z0-9@/+.-]+/)) {
-    if (token.length > 1 && !STOP.has(token)) {
-      out.add(token);
-    }
+  if (!res.ok) {
+    if (optional) return null;
 
-    // A dotted or slashed reference is one token above, which on its own can
-    // never match anything: `RedisQueue.send` has to also yield `redisqueue`
-    // and `send`, and `@imqueue/core` has to also yield `core`.
-    if (/[./]/.test(token)) {
-      for (const part of token.split(/[./]+/)) {
-        if (part.length > 1 && !STOP.has(part)) {
-          out.add(part);
-        }
+    throw new Error(`${path}: HTTP ${res.status}`);
+  }
+
+  return res.json();
+}
+
+/**
+ * Fetch, version-check and prepare the four feeds (cached, deduped).
+ *
+ * imqueue.org's own two tiers are REQUIRED — without them there is nothing to rank
+ * and no fallback that would not be a second, unmeasured ranker. The peer tiers are
+ * best-effort, and their absence is the one degradation worth naming: it is the
+ * commercial half of the corpus, so `pricing commercial license` stops answering from
+ * imqueue.com and answers from imqueue.org's own /license/ instead — a plausible
+ * answer, from the wrong edition, with no error anywhere. That is the failure this
+ * server's whole peer-feed story exists to prevent, so it degrades loudly in the log
+ * rather than silently in the results.
+ */
+export async function loadCorpus(): Promise<Corpus> {
+  if (corpusCache && Date.now() - corpusCache.at < TTL_MS) return corpusCache;
+  if (corpusInFlight) return corpusInFlight;
+
+  corpusInFlight = (async () => {
+    try {
+      const [index, text, peerIndex, peerText] = await Promise.all([
+        feed("/search-index.json", false) as Promise<RankerIndex>,
+        feed("/search-text.json", false) as Promise<RankerSectionIndex>,
+        feed("/search-peer-index.json", true) as Promise<RankerIndex | null>,
+        feed("/search-peer-text.json", true) as Promise<RankerSectionIndex | null>,
+      ]);
+
+      // Before preparing, not after: a shape this ranker cannot read must not be
+      // scored at all, and prepare() would happily annotate the wrong fields.
+      assertFeedVersion("/search-index.json", index);
+      assertFeedVersion("/search-text.json", text);
+
+      if (peerIndex) assertFeedVersion("/search-peer-index.json", peerIndex);
+      if (peerText) assertFeedVersion("/search-peer-text.json", peerText);
+
+      if (!peerIndex || !peerText) {
+        console.error(
+          "imqueue.com's search feeds are unavailable — licensing, pricing and support "
+            + "questions will answer from the framework docs instead of the commercial site.",
+        );
       }
+
+      corpusCache = {
+        at: Date.now(),
+        index: ranker.prepare(index),
+        text: ranker.prepareSections(text),
+        peerIndex: peerIndex ? ranker.prepare(peerIndex) : null,
+        peerText: peerText ? ranker.prepareSections(peerText) : null,
+      };
+
+      return corpusCache;
+    } catch (e) {
+      // A usable copy may be sitting in the cache past its TTL, and it is a far better
+      // answer than "cannot search the docs" — same reasoning as loadIndex.
+      if (corpusCache) return corpusCache;
+
+      throw new Error(
+        `Failed to load the search corpus from ${SITE} `
+          + `(${e instanceof Error ? e.message : String(e)})`,
+      );
+    } finally {
+      corpusInFlight = null;
     }
-  }
+  })();
 
-  return [...out];
-}
-
-const formsMemo = new Map<string, string[]>();
-
-/**
- * A token plus its plausible other inflections.
- *
- * Case-folding alone meant "authentication" returned NOTHING while "auth" put the
- * tutorial's auth service at #1, and "caching" found two package indexes while
- * "cache" found six real pages. Zero results is not a neutral outcome: it is
- * positive evidence to the model that the corpus does not cover the topic, so it
- * stops asking and answers from its priors.
- *
- * Deliberately NOT a stemmer that reduces to one canonical root — getting that
- * right per word is exactly the part that goes wrong. Both the corpus and the
- * query are expanded to a SET of candidate forms and matched form-to-form, so a
- * wrong guess costs a missed match rather than a wrong one. `-ing`/`-ed`/`-tion`
- * emit the bare stem and an `e`-restored variant precisely because we cannot tell
- * which of `cach`/`cache` is real.
- *
- * There is no synonym map, and there should not be: "login" and "pricing" return
- * nothing because no page on imqueue.org covers them, which is a corpus problem
- * (and, for pricing, an edition problem — see the imqueue.com entries loaded
- * below). Faking recall with synonyms would hide that.
- */
-function formsOf(token: string): string[] {
-  const memo = formsMemo.get(token);
-
-  if (memo) return memo;
-
-  const forms = new Set<string>([token]);
-  const add = (s: string) => {
-    if (s.length > 2 && !STOP.has(s)) forms.add(s);
-  };
-
-  if (/ies$/.test(token)) {
-    add(`${token.slice(0, -3)}y`); // retries -> retry
-  } else if (/(?:ses|xes|zes|ches|shes)$/.test(token)) {
-    add(token.slice(0, -2)); // caches -> cache, matches -> match
-  } else if (/es$/.test(token)) {
-    add(token.slice(0, -1));
-    add(token.slice(0, -2));
-  } else if (/[^s]s$/.test(token)) {
-    add(token.slice(0, -1)); // jobs -> job
-  }
-
-  if (/ing$/.test(token)) {
-    const base = token.slice(0, -3);
-
-    add(base);
-    add(`${base}e`); // caching -> cach, cache
-  }
-
-  if (/ed$/.test(token)) {
-    const base = token.slice(0, -2);
-
-    add(base);
-    add(`${base}e`); // traced -> trac, trace
-  }
-
-  if (/(?:tion|sion)$/.test(token)) {
-    const base = token.slice(0, -4);
-
-    add(base);
-    add(`${base}e`); // validation -> valida, validate
-    add(`${base}t`); // -> validat, so it meets validated's own stem
-  }
-
-  const list = [...forms];
-
-  formsMemo.set(token, list);
-
-  return list;
-}
-
-/** Literal tokens plus every inflection of each — the set matching runs on. */
-function matchTerms(s: string): string[] {
-  const out = new Set<string>();
-
-  for (const t of tokenize(s)) {
-    for (const f of formsOf(t)) out.add(f);
-  }
-
-  return [...out];
-}
-
-/**
- * The title split at identifier boundaries: `MigrateDownOptions.generateOnly` ->
- * `migrate down options generate only`.
- *
- * Partial title matching used `title.includes(t)` with no boundary check, which
- * put six `@imqueue/pg-prisma` migration symbols in all six slots for "rate
- * limiting" — 'rate' is inside 'migrate' and 'generate' — while
- * `@imqueue/http-protect`, whose own one-liner is "Per-IP rate limiting and
- * banning", returned nothing. "rate limit per IP" was worse: 'ip' inside
- * 'descrIPtion'.
- *
- * A prefix match on a segment keeps the case the original code was written for
- * ('options' still starts with 'option') and kills both false positives. The
- * four-character floor is what stops two- and three-letter fragments matching
- * across the whole corpus.
- */
-function titleSegments(title: string): string[] {
-  return title
-    .split(/[^A-Za-z0-9]+|(?=[A-Z])/)
-    .map((s) => s.toLowerCase())
-    .filter((s) => s.length > 1);
-}
-
-const MIN_PARTIAL = 4;
-
-/**
- * What a blog post's score is multiplied by (see the comment at the demotion).
- * 0.75 loses a near-tie to a doc page and wins a decisive one.
- */
-const BLOG_WEIGHT = 0.75;
-
-/**
- * What a match earns when one side of it is an inflection rather than the word
- * actually written, applied once per derived side.
- *
- * Expanding both the corpus and the query buys recall, and it costs precision if
- * a guessed form counts for as much as a real one: "redis cluster setup" lost
- * `ClusteredRedisQueue` from first place to three unrelated `redis` options,
- * because every page saying "clustered" now also votes for `cluster` and diluted
- * its weight. Discounting derived matches keeps the recall and gives the term
- * someone actually typed the louder vote.
- */
-const INFLECTION_WEIGHT = 0.6;
-
-function segmentPrefixHit(segments: string[], term: string): boolean {
-  return term.length >= MIN_PARTIAL && segments.some((s) => s.startsWith(term));
-}
-
-/** 1 for a blog post, 0 for documentation. */
-function isBlog(e: DocEntry): 0 | 1 {
-  return e.section === "Articles" || e.url.includes("/blog/") ? 1 : 0;
+  return corpusInFlight;
 }
 
 /**
  * True when `e` belongs to `pkg` — the `package` filter of `search_docs`.
  *
- * Accepts `http-protect` or `@imqueue/http-protect`. Symbol sections carry the
- * package name; curated package indexes carry it in the URL, and they are the one
- * kind of prose page that belongs in a package-scoped answer.
+ * Accepts `http-protect` or `@imqueue/http-protect`. Kept for `suggest()` and for the
+ * curated half; the ranker does its own package filtering (see `scopedQuery`).
  */
 function inPackage(e: DocEntry, pkg: string): boolean {
-  const short = pkg.trim().replace(/^@imqueue\//, "").toLowerCase();
+  const short = shortPackage(pkg);
 
   if (!short) return true;
 
@@ -439,336 +335,262 @@ function inPackage(e: DocEntry, pkg: string): boolean {
   );
 }
 
-type Weigh = (term: string) => number;
-
-/**
- * One entry with everything the scorer needs precomputed.
- *
- * Cached against the identity of the two feed arrays (same as `weighCache`), so a
- * warm isolate serving many searches tokenizes the corpus once rather than once
- * per query.
- */
-interface Prepared {
-  e: DocEntry;
-  /** Literal title tokens — used for the "query names the whole title" bonus. */
-  titleLiteral: string[];
-  /**
-   * Whole-strength title vocabulary: the title's own tokens AND its identifier
-   * segments, each with inflections.
-   *
-   * A segment is a word boundary, so a term equal to one is as strong a hit as a
-   * whole token — `ClusteredRedisQueue` is a single token, and treating `redis`
-   * inside it as a mere fragment is what let `PgCacheOptions.redis` (where the dot
-   * makes `redis` a token) outrank the class the query was about.
-   */
-  strong: Set<string>;
-  /** The literal half of `strong`, for telling a real match from a guessed one. */
-  strongLiteral: Set<string>;
-  segments: string[];
-  sectionTerms: Set<string>;
-  summaryTerms: Set<string>;
-  /** section + description + url, lowercased: the loose haystack for prose. */
-  hay: string;
-  blog: 0 | 1;
-}
-
-let weighCache: {
-  curated: DocEntry[];
-  symbols: DocEntry[];
-  weigh: Weigh;
-  df: Map<string, number>;
-  prepared: Prepared[];
-} | null = null;
-
-/**
- * Weight a term by how rare it is across the corpus (normalised IDF, 0..1).
- *
- * Every page here is about @imqueue services, so `imqueue`, `service` and
- * `queue` occur in a large share of titles while saying nothing about which page
- * answers the question. Paying them the same as the one term that discriminates
- * is what broke natural-language queries: "how do I expose a method on an
- * @imqueue service?" scored three "X vs @imqueue" comparison articles above the
- * `expose` reference, because each matched `imqueue` AND `service` in its title
- * for +5 apiece while `expose` earned +5 once. Long conversational questions —
- * i.e. everything a chat user types — hit that every time, and a client that
- * gets three off-topic essays concludes this server cannot answer and falls back
- * to a web search.
- *
- * The df map is derived from the two cached feeds and cached against their
- * identity, so it is rebuilt only when a feed is refetched.
- */
-function corpus(curated: DocEntry[], symbols: DocEntry[]) {
-  if (weighCache && weighCache.curated === curated && weighCache.symbols === symbols) {
-    return weighCache;
-  }
-
-  const df = new Map<string, number>();
-  const all = [...curated, ...symbols];
-  const prepared: Prepared[] = all.map((e) => {
-    const titleLiteral = tokenize(e.title);
-    const segments = titleSegments(e.title);
-    const strongLiteral = new Set([...titleLiteral, ...segments]);
-    const strong = new Set<string>();
-
-    for (const t of strongLiteral) {
-      for (const f of formsOf(t)) strong.add(f);
-    }
-
-    return {
-      e,
-      titleLiteral,
-      strong,
-      strongLiteral,
-      segments,
-      sectionTerms: new Set(matchTerms(e.section)),
-      summaryTerms: new Set(matchTerms(e.description)),
-      hay: `${e.section} ${e.description} ${e.url}`.toLowerCase(),
-      blog: isBlog(e),
-    };
-  });
-
-  // Document frequency over the SAME expanded forms the scorer matches on, so an
-  // inflection gets its real rarity. Counting only literals would leave every
-  // stem absent from the map and therefore weighted as the rarest thing in the
-  // corpus — the inverse of what it is.
-  for (const p of prepared) {
-    const seen = new Set<string>([...p.strong, ...p.sectionTerms, ...p.summaryTerms]);
-
-    for (const t of seen) df.set(t, (df.get(t) || 0) + 1);
-  }
-
-  const n = all.length || 1;
-  const norm = Math.log(n + 1);
-  const memo = new Map<string, number>();
-
-  const weigh: Weigh = (term) => {
-    let w = memo.get(term);
-
-    if (w === undefined) {
-      // Floored rather than zeroed: a query made only of ubiquitous words must
-      // still rank something instead of returning nothing at all.
-      w = Math.max(0.05, Math.log((n + 1) / ((df.get(term) || 0) + 1)) / norm);
-      memo.set(term, w);
-    }
-
-    return w;
-  };
-
-  weighCache = { curated, symbols, weigh, df, prepared };
-
-  return weighCache;
+function shortPackage(pkg: string): string {
+  return pkg.trim().replace(/^@imqueue\//, "").toLowerCase();
 }
 
 /**
- * Rank doc entries by overlap of query terms with title (weighted), section,
- * description and url. Every term's contribution is scaled by `weigher()`, so a
- * rare, specific term outweighs one the whole corpus shares.
+ * Fold a curated llms.txt URL into the key the feeds use: a root-relative path.
  *
- * Curated pages match on all of those. API symbol pages match on the symbol name
- * only: 350 symbols share so much vocabulary with each other and with the guides
- * ("method", "options", "queue", "message") that scoring their sections and
- * summaries freely would bury every conceptual answer under near-identical
- * symbol hits. A summary term only refines a symbol that already matched by name.
+ * The two feeds hold root-relative URLs for their own edition, while llms.txt entries
+ * are written however the site writes them, and both editions have a `/license/` and a
+ * `/contact/` that are different pages. So the key carries the host.
+ */
+function urlKey(u: string, base = SITE): string {
+  try {
+    const url = new URL(u, base);
+
+    return `${url.hostname}${url.pathname.replace(/\/+$/, "")}`;
+  } catch {
+    return u;
+  }
+}
+
+/**
+ * Section label per result, and the ONE thing llms.txt is still read for.
+ *
+ * `section` is a frozen output field of search_docs and a caller reads it to decide
+ * whether it is looking at the framework or at the licence, so it has to keep meaning
+ * what it meant. Four sources, in falling order of how hand-made they are:
+ *
+ *  * an API symbol keeps today's exact `API · @imqueue/pkg kind` shape. Not cosmetic:
+ *    packages.ts detects the mutually-exclusive pairs by looking for a package name in
+ *    `section + url`, so a label that stopped naming the package would silently stop
+ *    the pg-prisma/pg-sequelize and opentelemetry/datadog advisories from firing;
+ *  * otherwise the curated llms.txt section, which is the only hand-written one
+ *    ("Guides", "Commercial · imqueue.com");
+ *  * otherwise the page's own kind from the feed — Recipe, Tutorial, CLI, Glossary,
+ *    Compare, Article — which is better than any label derivable from the URL;
+ *  * and an answer names the page it was lifted out of, because a question-shaped
+ *    result is only useful if you can see what it is an answer within.
+ */
+function labelFor(hit: Hit, curated: Map<string, string>): string {
+  const { record } = hit;
+  const host = hit.external ? "imqueue.com" : "imqueue.org";
+
+  if (record.g === 1) {
+    return `API · ${record.p || "@imqueue"}${record.k ? ` ${record.k}` : ""}`;
+  }
+
+  const label = curated.get(urlKey(record.u, hit.external ? COM : SITE));
+
+  if (label) return label;
+
+  // On an answer record `k` holds the PARENT PAGE'S TITLE, not a kind — the field is
+  // overloaded by group in the feed. Titles are long, so it is trimmed rather than
+  // repeated whole into every result.
+  if (record.g === 2 && record.k) {
+    return `Answer · ${truncate(record.k, 60)}`;
+  }
+
+  const kind = record.k && record.k !== "Docs" ? record.k : "Docs";
+
+  return hit.external ? `${kind} · imqueue.com` : kind;
+}
+
+/** Cut at a word boundary, so a description does not end mid-identifier. */
+function truncate(text: string, max: number): string {
+  const clean = text.replace(/\s+/g, " ").trim();
+
+  if (clean.length <= max) return clean;
+
+  const cut = clean.slice(0, max);
+  const space = cut.lastIndexOf(" ");
+
+  return `${(space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
+
+/**
+ * How much of a matched section to hand back as the description.
+ *
+ * The website shows a 190-character snippet highlighted around the query. An agent has
+ * no highlighting and a much better use for the text, so this is generous by
+ * comparison — but still a description, not a read: `get_doc` is one call away and
+ * Phase 3 will return the section itself.
+ */
+const SECTION_CHARS = 320;
+
+function describe(hit: Hit): string {
+  const { record } = hit;
+
+  // A section hit's own record carries no summary (the ranker synthesises it from the
+  // page and the heading), so the matched prose IS the description.
+  if (hit.section) return truncate(sectionText(hit), SECTION_CHARS);
+
+  const summary = truncate(record.s || "", SECTION_CHARS);
+
+  // The deprecation marker leads, so an agent scanning results sees it before it
+  // copies the symbol into code.
+  return record.d ? `DEPRECATED — do not use in new code. ${summary}`.trim() : summary;
+}
+
+/**
+ * Drop the website's site-priority rule, keeping everything else about the order.
+ *
+ * The ranker sorts `(a.external ? 1 : 0) - (b.external ? 1 : 0)` FIRST, so on
+ * imqueue.org every imqueue.org result precedes every imqueue.com one however much
+ * better the imqueue.com one is. That is right for a website and its own comment says
+ * why — "THE SITE YOU ARE ON WINS" — because a reader on imqueue.org asking about
+ * licensing should see imqueue.org's own licence page before the commercial site's.
+ *
+ * AN MCP CLIENT IS ON NO SITE. It asked about pricing, and pricing exists only on
+ * imqueue.com. Measured against the live feeds with the rule in force: `commercial
+ * license` and `is imqueue free for commercial use` returned NO imqueue.com result at
+ * all inside the default limit of 6, and `pricing commercial license` returned one at
+ * #5 — gone at `limit: 3`. That is a regression on precisely the question this server
+ * went out of its way to fix, and the kind that reads as a confident answer from the
+ * wrong edition rather than as an error.
+ *
+ * Re-sorting here rather than changing the ranker keeps the website byte-identical, and
+ * it is the honest place for it: this is the one ranking rule that encodes *where the
+ * reader is standing*, which is a property of the caller and not of the corpus.
+ *
+ * It cannot change WHICH hits come back, only their order — the ranker's per-group
+ * floor keys local and peer groups separately (`"x:" + groupKey(hit)`) and its
+ * per-page cap is keyed by URL, so both had already been applied when `search()`
+ * returned. The remaining keys are the ranker's own tie-breaks, kept verbatim:
+ * shortest title, then shortest URL.
+ */
+function byScore(hits: Hit[]): Hit[] {
+  return [...hits].sort(
+    (a, b) =>
+      b.score - a.score
+      || a.record.t.length - b.record.t.length
+      || a.record.u.length - b.record.u.length,
+  );
+}
+
+/**
+ * Turn the ranker's hits into the tool's own result shape.
+ *
+ * The URL is the part that must not be got wrong. Feed records hold root-relative
+ * paths for THEIR OWN edition, and `external` is the only thing that says which
+ * edition that is — so prefixing every record with imqueue.org would hand back
+ * imqueue.org URLs for imqueue.com's pricing pages. They would 404 through `get_doc`,
+ * and returning URLs a caller cannot use is the one change here that would force a
+ * major version bump rather than a minor one.
+ */
+function toEntries(hits: Hit[], curated: Map<string, string>, limit: number): DocEntry[] {
+  const out: DocEntry[] = [];
+
+  for (const hit of byScore(hits)) {
+    if (out.length >= limit) break;
+
+    out.push({
+      title: hit.record.t,
+      url: `${hit.external ? COM : SITE}${hit.record.u}`,
+      description: describe(hit),
+      section: labelFor(hit, curated),
+      ...(hit.record.g === 1 ? { symbol: true } : {}),
+    });
+  }
+
+  return out;
+}
+
+/** URL key -> curated section label, for both editions. */
+function curatedSections(entries: DocEntry[]): Map<string, string> {
+  const map = new Map<string, string>();
+
+  for (const e of entries) {
+    // imqueue.com's entries are the ones whose section carries the suffix loadIndex
+    // appends, and their URLs are relative to imqueue.com.
+    const base = e.section.endsWith(" · imqueue.com") ? COM : SITE;
+
+    map.set(urlKey(e.url, base), e.section);
+  }
+
+  return map;
+}
+
+/**
+ * Express the `package` filter as the ranker's own `pkg:` syntax.
+ *
+ * Reusing the ranker's filter rather than post-filtering its output is the whole point:
+ * a filter applied afterwards would take the top N and then discard from them, so a
+ * scoped search would return fewer results than it found, or none at all.
+ *
+ * Two consequences of the ranker's implementation, both accepted deliberately:
+ * a scoped query matches on the record's own `package` field, so it reaches API
+ * symbols and package index pages but not a guide that merely discusses the package;
+ * and the ranker skips the prose tier entirely while a filter is set, so a scoped
+ * search returns reference rather than articles. Both are what the website does, and
+ * "what the website does" is the property this whole change is for.
+ */
+function scopedQuery(query: string, pkg?: string): string {
+  const short = pkg ? shortPackage(pkg) : "";
+
+  return short ? `pkg:${short} ${query}` : query;
+}
+
+/**
+ * Search the docs: the four feeds, the shared ranker, and nothing of our own.
+ *
+ * `limit` is applied here rather than inside the ranker because the ranker does not
+ * take one — it returns everything above its relative and absolute floors, which is
+ * how the website can show groups. See the note on eviction in the plan: the hits this
+ * drops are a measured question, not a settled one.
  */
 export async function searchDocs(query: string, limit = 6, pkg?: string): Promise<DocEntry[]> {
-  const [curated, symbols] = await Promise.all([loadIndex(), loadApiIndex()]);
+  const [corpus, curated] = await Promise.all([loadCorpus(), loadIndex()]);
 
-  return rankEntries(curated, symbols, query, limit, pkg);
+  return rankCorpus(corpus, curated, query, limit, pkg);
 }
 
 /**
- * The ranker, separated from the fetching so it can be tested on a fixed corpus.
+ * The search, separated from the fetching so it can be tested on a fixed corpus.
  *
- * Every defect this function has had was a ranking defect, and none of them were
- * catchable while the only way to run it was against the live site: the corpus
- * moves, so an assertion about what comes back either encodes today's content or
- * nothing at all. See test/ranking.test.ts.
+ * The same split the old ranker had, and for the same reason it gave: every defect this
+ * has ever had was a defect of *what comes back*, and none of them are assertable while
+ * the only way to run it is against the live site — the corpus moves, so a test written
+ * against it encodes today's content rather than the rule. What is testable here is now
+ * the mapping rather than the ranking: the ranking belongs to the submodule and is
+ * measured by imqueue.com's KPI harness.
  */
-export function rankEntries(
+export function rankCorpus(
+  corpus: Corpus,
   curated: DocEntry[],
-  symbols: DocEntry[],
   query: string,
   limit = 6,
   pkg?: string,
 ): DocEntry[] {
-  const terms = matchTerms(query);
+  // Assigned per search rather than once at load: the corpus can be refetched behind
+  // us, and `search()` is synchronous, so setting it immediately before the call is
+  // what makes an interleaved refresh unable to score half of one corpus and half of
+  // another.
+  ranker.state.t1 = corpus.index;
+  ranker.state.t2 = corpus.text;
+  ranker.state.x1 = corpus.peerIndex;
+  ranker.state.x2 = corpus.peerText;
 
-  if (!terms.length) return curated.slice(0, limit);
+  const parsed = ranker.parseQuery(scopedQuery(query, pkg));
 
-  // A question wants a page that explains; an identifier wants the symbol. Both
-  // shapes match the same words, so without this distinction "how do I handle
-  // errors in a service?" ranks `IMQOptions.handleSignals` — a property page
-  // that answers nothing — above the guides, which is what makes a client give
-  // up on this server and go and search the web instead.
-  const asksHow = /\b(how|what|which|why|when|where|can|should|do|does|is|are)\b/i.test(query);
+  // A query with no terms in it matches EVERYTHING, not nothing — verified against the
+  // ranker: with `terms` empty every record clears the score floor, so `"   "` came back
+  // as the whole corpus truncated to `limit`, in ranked order, presented as relevant.
+  //
+  // On the website that is unreachable, which is why it is not a bug there: the dialog
+  // does not search an empty input. Here it is reachable, because `search_docs` bounds
+  // `query` at min(1) and whitespace satisfies that. The old ranker had the same hole and
+  // answered it with the first N curated pages, so this is not a regression — it is an
+  // edge that was never closed.
+  //
+  // Zero results is both the honest answer and the more useful one: server.ts turns an
+  // empty result into what the corpus covers plus the indexed terms nearest the query,
+  // which is information the model cannot have.
+  if (!parsed.terms.length) return [];
 
-  // Curated entries come first so that a tie between a guide and a symbol page
-  // for the same URL keeps the guide's hand-written description (stable sort).
-  const asked = new Set(terms);
-  // The words actually typed, as opposed to the inflections derived from them.
-  const literal = new Set(tokenize(query));
-  const { weigh, prepared } = corpus(curated, symbols);
-  const pool = pkg ? prepared.filter((p) => inPackage(p.e, pkg)) : prepared;
-  const scored = pool.map((p) => {
-    const { e } = p;
-
-    let score = 0;
-    let titleHit = false;
-    let namedHit = false;
-    let contextHit = false;
-    let summaryOnly = false;
-
-    // A match is discounted once for each side of it that is a guessed form
-    // rather than a written word, so literal-to-literal always wins.
-    const asWritten = (t: string) => (literal.has(t) ? 1 : INFLECTION_WEIGHT);
-
-    for (const t of terms) {
-      if (p.strong.has(t)) {
-        // Whole-token or whole-segment hit: `send` in `RedisQueue.send`, `redis`
-        // in `ClusteredRedisQueue`.
-        score += 5 * weigh(t) * asWritten(t) * (p.strongLiteral.has(t) ? 1 : INFLECTION_WEIGHT);
-        titleHit = true;
-        namedHit = true;
-      } else if (segmentPrefixHit(p.segments, t)) {
-        score += 3 * weigh(t) * asWritten(t); // partial hit: `option` in `IMQOptions`
-        titleHit = true;
-      }
-    }
-
-    // The package a symbol belongs to lives in its section and was never scored,
-    // so "opentelemetry" matched exactly one entry — the package index — while 26
-    // opentelemetry symbols sat unmatched in the same feed, and "tracing" returned
-    // six @imqueue/datadog results and no @imqueue/opentelemetry. That inverts the
-    // project's own advice: datadog is only for a fleet already standing on
-    // Datadog's agent, and installing both patches the same rpc hooks.
-    for (const t of terms) {
-      if (!p.strong.has(t) && p.sectionTerms.has(t)) {
-        score += 2 * weigh(t) * asWritten(t);
-        contextHit = true;
-      }
-    }
-
-    if (e.symbol) {
-      // Symbol summaries used to be scored ONLY as a tie-breaker on a name that
-      // had already matched — `if (e.symbol && !titleHit) return 0` — which made
-      // all 1,152 hand-written summaries unreachable on their own. "how do I stop
-      // a service cleanly on SIGTERM" scored `IMQOptions.handleSignals`, whose
-      // summary is literally "Enable process signal handling (SIGTERM, SIGINT,
-      // SIGABRT)", at exactly zero.
-      //
-      // So a summary now scores by itself, at low weight and capped at one term:
-      // enough to be findable, never enough to outrank the prose page written to
-      // answer the question. Capped rather than accumulated because symbol
-      // summaries repeat the same handful of words across a whole class.
-      const hits = terms.filter((t) => p.summaryTerms.has(t));
-
-      if (hits.length) {
-        const best = Math.max(...hits.map((t) => weigh(t) * asWritten(t)));
-
-        if (titleHit || contextHit) {
-          score += best;
-        } else {
-          score += 0.8 * best;
-          summaryOnly = true;
-        }
-      }
-
-      if (!titleHit && !contextHit && !summaryOnly) {
-        return { p, score: 0, summaryOnly };
-      }
-    } else {
-      for (const t of terms) {
-        if (p.hay.includes(t)) {
-          score += weigh(t) * asWritten(t);
-        }
-      }
-    }
-
-    // A query naming a whole title — "ClusteredRedisQueue" — wants that page, not
-    // its twenty members, every one of which also contains the class name.
-    // Scaled by the most distinctive word in the title, so covering all of
-    // `expose` earns far more than covering all of a title made of common words.
-    //
-    // Tested against the LITERAL title tokens, matched through their inflections:
-    // testing the expanded set instead would lose the bonus for every title whose
-    // words the query spelled differently.
-    if (p.titleLiteral.length && p.titleLiteral.every((t) => formsOf(t).some((f) => asked.has(f)))) {
-      score += 4 * Math.max(...p.titleLiteral.map(weigh));
-    }
-
-    // Two kinds of symbol page that cannot answer a "how do I …" question however
-    // well the name matches: a single field or constructor of one class, and a
-    // page matched only on a fragment of its name — `run` inside `runWithRequest`,
-    // `handle` inside `handleSignals`. A symbol whose name a term hits whole,
-    // like `expose`, is exactly the right answer and stays where it scored.
-    if (asksHow && e.symbol && (!namedHit || /\b(property|variable|constructor)\b/.test(e.section))) {
-      score *= 0.5;
-    }
-
-    // Documentation should lead whenever the docs cover the question: articles are
-    // long-form and mention every term in the vocabulary, so on raw relevance they
-    // beat the pages written to answer it — "how do I expose a method?" used to
-    // come back as three "X vs @imqueue" comparison essays.
-    //
-    // This was a PRIMARY SORT KEY, which overcorrected: two pg-pubsub constants
-    // that merely contain the words outranked the 2,000-word article about
-    // graceful shutdown, and for "how do I stop a service cleanly on SIGTERM" the
-    // article did not appear at all. A multiplier keeps the preference while
-    // letting a decisively better article still lead — which is the page an answer
-    // engine would actually cite.
-    if (p.blog) score *= BLOG_WEIGHT;
-
-    return { p, score, summaryOnly };
-  });
-
-  const hits = scored.filter((x) => x.score > 0);
-
-  // Equal scores break toward prose: a symbol reached only through its summary is
-  // by definition a weaker answer than a page that matched outright.
-  const ranked = hits.sort(
-    (a, b) => b.score - a.score || Number(a.summaryOnly) - Number(b.summaryOnly),
-  );
-
-  // A package index is listed both in llms.txt and in the symbol feed.
-  const seen = new Set<string>();
-  const out: DocEntry[] = [];
-
-  // A class's members all carry its name, so they all score alike: without a cap,
-  // "redis cluster setup" fills every slot with ClusteredRedisQueue methods and
-  // pushes out the guide that actually answers it.
-  const perParent = new Map<string, number>();
-  // The same member name across DIFFERENT classes is the other way six
-  // near-identical pages fill the answer, and the per-parent cap cannot see it:
-  // "how do I stop a service cleanly on SIGTERM" returned IMQService.stop,
-  // ClusteredRedisQueue.stop, IMessageQueue.stop, RedisQueue.stop,
-  // AnyJobQueue.stop and BaseJobQueue.stop — six different parents, one answer
-  // repeated, and no room left for the option that actually handles signals or the
-  // article written about it.
-  const perLeaf = new Map<string, number>();
-  const maxPerName = Math.max(2, Math.ceil(limit / 3));
-
-  for (const { p: { e } } of ranked) {
-    if (seen.has(e.url)) continue;
-
-    const dot = e.symbol ? e.title.lastIndexOf(".") : -1;
-    const parent = dot > 0 ? e.title.slice(0, dot) : null;
-    // A class's own page is never capped, by either rule — that is usually the
-    // page worth reading first.
-    const leaf = dot > 0 ? e.title.slice(dot + 1).toLowerCase() : null;
-
-    if (parent && (perParent.get(parent) || 0) >= maxPerName) continue;
-    if (leaf && (perLeaf.get(leaf) || 0) >= maxPerName) continue;
-
-    if (parent) perParent.set(parent, (perParent.get(parent) || 0) + 1);
-    if (leaf) perLeaf.set(leaf, (perLeaf.get(leaf) || 0) + 1);
-
-    seen.add(e.url);
-    out.push(e);
-
-    if (out.length >= limit) break;
-  }
-
-  return out;
+  return toEntries(ranker.search(parsed), curatedSections(curated), limit);
 }
 
 /**
@@ -781,34 +603,55 @@ export function rankEntries(
  * prevent. So: the section names, and the indexed terms nearest to the query.
  */
 export async function suggest(query: string): Promise<{ sections: string[]; nearest: string[] }> {
-  const [curated, symbols] = await Promise.all([loadIndex(), loadApiIndex()]);
-  const { df } = corpus(curated, symbols);
-
+  const curated = await loadIndex();
   const sections: string[] = [];
 
   for (const e of curated) {
     if (!sections.includes(e.section)) sections.push(e.section);
   }
 
-  const asked = tokenize(query);
+  // The vocabulary now comes from the PROSE corpus's own document frequencies — 5,310
+  // terms over 719 sections, built by prepareSections. That is a straight upgrade on
+  // what this used to read: the old df map was built from titles, sections and
+  // summaries only, so "the indexed terms nearest your query" could not offer a word
+  // that appears in the documentation but in no title.
+  //
+  // It is also the only part of this function that can fail, so it fails alone: naming
+  // what the corpus covers is still worth returning when the feeds are unreachable.
+  let df: Record<string, number> = {};
+  let asked: string[] = [];
+
+  try {
+    const corpus = await loadCorpus();
+
+    df = corpus.text.df ?? {};
+    // The ranker's own tokenizer, not a second one. It folds and splits exactly as the
+    // search did, which is what makes "nearest to your query" mean nearest to the
+    // query that actually ran.
+    asked = ranker.parseQuery(query).terms;
+  } catch {
+    return { sections, nearest: [] };
+  }
+
   const scoredTerms: { term: string; n: number }[] = [];
   // Five, not four: a four-character prefix offered `characters` and `charges` for
   // "helm chart", and a suggestion list full of coincidences is worse than none —
   // it invites another query that also returns nothing.
   const NEAR_PREFIX = 5;
+  const NEAR_CONTAINS = 4;
 
-  for (const [term, n] of df) {
+  for (const term of Object.keys(df)) {
     // "Nearest" means shares a real prefix with, or contains, something asked for
     // — enough to surface `authenticated` for "authentication" without pretending
     // to be a spell-checker.
     const near = asked.some(
       (t) =>
         (t.length >= NEAR_PREFIX && term.startsWith(t.slice(0, NEAR_PREFIX)))
-        || (t.length >= MIN_PARTIAL && term.includes(t))
-        || (term.length >= MIN_PARTIAL && t.includes(term)),
+        || (t.length >= NEAR_CONTAINS && term.includes(t))
+        || (term.length >= NEAR_CONTAINS && t.includes(term)),
     );
 
-    if (near && !asked.includes(term)) scoredTerms.push({ term, n });
+    if (near && !asked.includes(term)) scoredTerms.push({ term, n: df[term] ?? 0 });
   }
 
   // Commonest first: a term one page uses once is a worse suggestion than one the
