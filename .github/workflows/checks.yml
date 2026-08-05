@@ -32,6 +32,13 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          # REQUIRED. The ranker is the imqueue/search-ranker submodule at
+          # vendor/search-ranker, and scripts/copy-ranker.mjs — which every step below
+          # reaches through `npm run ranker` — exits 1 without it. Not an optimisation:
+          # without this, build, typecheck:worker, typecheck:test and test all fail, and
+          # they fail for a reason that has nothing to do with the commit being checked.
+          submodules: true
 
       - uses: actions/setup-node@v4
         with:
