@@ -387,7 +387,7 @@ function registerSharedTools(server: McpServer): void {
     {
       ...meta("Read an @imqueue doc page", "read", true), // fetches a live page from imqueue.org (host-locked)
       description:
-        "Fetch the full markdown of an @imqueue documentation page by its URL (as returned by search_docs). Returns plain markdown suitable for reading and quoting. Only imqueue.org (framework docs) and imqueue.com (licensing, pricing, support) URLs are fetched; anything else is refused. Very large pages are truncated, which the result reports.",
+        "Fetch the markdown of an @imqueue documentation page by its URL (as returned by search_docs). Returns plain markdown suitable for reading and quoting. Pass a URL with a #fragment — which is what search_docs returns for a section result — to get just that section plus the heading path above it; pass the URL without one to read the whole page. Only imqueue.org (framework docs) and imqueue.com (licensing, pricing, support) URLs are fetched; anything else is refused. Very large pages are truncated, which the result reports.",
       inputSchema: {
         url: z.string().describe("An imqueue.org or imqueue.com page URL, e.g. https://imqueue.org/get-started/"),
       },
@@ -421,8 +421,38 @@ function registerSharedTools(server: McpServer): void {
       try {
         const doc = await getDoc(url);
 
+        // The header, and it is load-bearing rather than decorative. A section arrives with
+        // no surrounding page, so without the heading path a caller cannot tell whether
+        // "Verify" belongs to the delayed-work recipe or the auth tutorial, and without the
+        // count it cannot tell that eleven more sections exist. Both go in `content`: the
+        // output schema is part of the frozen listing surface, so nothing is added to it.
+        const lines = [`Source: ${doc.url}`];
+
+        if (doc.section) {
+          const path = [...doc.section.ancestors, doc.section.heading].join(" › ");
+
+          lines.push(`Section: ${path}`);
+          lines.push(
+            `This is section ${doc.section.index} of ${doc.section.total} on the page. `
+              + `Call get_doc on ${doc.url.replace(/index\.md$/, "")} without a #fragment `
+              + "to read the whole page.",
+          );
+        } else if (doc.fragmentMiss) {
+          lines.push(
+            `Note: #${doc.fragmentMiss.anchor} is not an indexed section of this page, `
+              + "so the whole page is returned.",
+          );
+
+          if (doc.fragmentMiss.available.length) {
+            lines.push(
+              `Indexed sections: ${doc.fragmentMiss.available.slice(0, 20).join(", ")}`
+                + (doc.fragmentMiss.available.length > 20 ? ", …" : ""),
+            );
+          }
+        }
+
         return {
-          content: [{ type: "text" as const, text: `Source: ${doc.url}\n\n${doc.markdown}` }],
+          content: [{ type: "text" as const, text: `${lines.join("\n")}\n\n${doc.markdown}` }],
           structuredContent: {
             url: doc.url,
             mimeType: "text/markdown",

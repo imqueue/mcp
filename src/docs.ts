@@ -319,6 +319,159 @@ export async function loadCorpus(): Promise<Corpus> {
 }
 
 /**
+ * `/search-sections.json` — anchor -> `[start, end)` line range into the page's markdown
+ * mirror. Verified against the built mirrors: the offsets are **0-indexed and absolute in
+ * the file**, `start` is the heading's own line, and the last range's `end` is the line
+ * count. (They could easily not have been: the generator's `splitSections()` sees a
+ * substring of the file, so imqueue.com's build computes a `bodyLine` offset to make them
+ * absolute, and `check-search-index.js` asserts all four properties every build.)
+ */
+export interface SectionRanges {
+  v: number;
+  pages: Record<string, Record<string, [number, number]>>;
+}
+
+const sectionsCache = new Map<string, { at: number; ranges: SectionRanges }>();
+const sectionsInFlight = new Map<string, Promise<SectionRanges | null>>();
+
+/**
+ * Load one edition's section ranges. Keyed by ORIGIN because `get_doc` reads both hosts.
+ *
+ * OPTIONAL BY DESIGN — every failure path returns null, and the caller then serves the
+ * whole page. Slicing is an improvement on returning 9 kB, not a precondition for reading
+ * a doc, so a missing or unreadable feed must cost a caller a bigger answer and never an
+ * error. That is also why the version mismatch is caught here rather than thrown: a feed
+ * this build cannot read is exactly as useful as no feed.
+ */
+async function loadSections(origin: string): Promise<SectionRanges | null> {
+  const hit = sectionsCache.get(origin);
+
+  if (hit && Date.now() - hit.at < TTL_MS) return hit.ranges;
+
+  const flight = sectionsInFlight.get(origin);
+
+  if (flight) return flight;
+
+  const load = (async () => {
+    try {
+      const res = await get(`${origin}/search-sections.json`);
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const ranges = (await res.json()) as SectionRanges;
+
+      assertFeedVersion("/search-sections.json", ranges as unknown as { v?: number });
+
+      if (!ranges.pages || typeof ranges.pages !== "object") {
+        throw new Error("no `pages` map");
+      }
+
+      sectionsCache.set(origin, { at: Date.now(), ranges });
+
+      return ranges;
+    } catch (e) {
+      // Stale beats absent, for the same reason loadCorpus prefers it: a range list is
+      // append-mostly, so last hour's copy slices today's page correctly far more often
+      // than not, and a wrong range shows up as a heading mismatch below.
+      if (hit) return hit.ranges;
+
+      console.error(
+        `${origin}/search-sections.json is unavailable `
+          + `(${e instanceof Error ? e.message : String(e)}) — get_doc will return whole pages.`,
+      );
+
+      return null;
+    } finally {
+      sectionsInFlight.delete(origin);
+    }
+  })();
+
+  sectionsInFlight.set(origin, load);
+
+  return load;
+}
+
+/** One section of a page, with the heading path that says where it sits. */
+export interface DocSection {
+  /** The heading text, without its `#` marks. */
+  heading: string;
+  /** Enclosing headings, outermost first — the page title, then any parent sections. */
+  ancestors: string[];
+  /** 1-based position among the page's indexed sections, in document order. */
+  index: number;
+  total: number;
+}
+
+const headingOf = (line: string): { level: number; text: string } | null => {
+  const m = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
+
+  return m ? { level: m[1].length, text: m[2] } : null;
+};
+
+/**
+ * Cut one section out of a page's markdown.
+ *
+ * Returns null when the anchor is not indexed, which the caller reports rather than
+ * papering over: silently serving the whole page for a misspelt fragment teaches an agent
+ * that its fragment worked.
+ *
+ * The ancestor chain is derived from the markdown rather than carried in the feed. It has
+ * to be read anyway, the headings above `start` are exactly the enclosing ones, and a
+ * derived chain cannot disagree with the text it is describing.
+ */
+export function sliceSection(
+  markdown: string,
+  ranges: Record<string, [number, number]>,
+  anchor: string,
+): { markdown: string; section: DocSection } | null {
+  const range = ranges[anchor];
+
+  if (!range) return null;
+
+  const lines = markdown.split("\n");
+  const [start, end] = range;
+
+  if (start >= lines.length) return null;
+
+  const own = headingOf(lines[start]);
+
+  // The range's first line must BE the heading. If it is not, this feed and this mirror
+  // disagree — a stale cached range against a rewritten page — and half a section is a
+  // worse answer than the whole page.
+  if (!own) return null;
+
+  const ordered = Object.entries(ranges)
+    .sort((a, b) => a[1][0] - b[1][0])
+    .map(([key]) => key);
+
+  // Innermost-first while walking backwards, so each kept heading must enclose the one
+  // before it; reversed at the end into reading order.
+  const ancestors: string[] = [];
+  let deepest = own.level;
+
+  for (let i = start - 1; i >= 0; i--) {
+    const h = headingOf(lines[i]);
+
+    if (h && h.level < deepest) {
+      ancestors.push(h.text);
+      deepest = h.level;
+
+      if (deepest === 1) break;
+    }
+  }
+
+  return {
+    markdown: lines.slice(start, Math.min(end, lines.length)).join("\n").replace(/\s+$/, ""),
+    section: {
+      heading: own.text,
+      ancestors: ancestors.reverse(),
+      index: ordered.indexOf(anchor) + 1,
+      total: ordered.length,
+    },
+  };
+}
+
+/**
  * True when `e` belongs to `pkg` — the `package` filter of `search_docs`.
  *
  * Accepts `http-protect` or `@imqueue/http-protect`. Kept for `suggest()` and for the
@@ -682,10 +835,27 @@ export function mirrorUrl(pageUrl: string): string {
   return `${url.origin}${p.endsWith("/") ? p : `${p}/`}index.md`;
 }
 
-/** Fetch the full markdown of a doc page by its page URL or path. */
-export async function getDoc(
-  pageUrl: string,
-): Promise<{ url: string; markdown: string; truncated: boolean }> {
+export interface DocResult {
+  url: string;
+  markdown: string;
+  truncated: boolean;
+  /** Present when a `#fragment` was given and resolved to one indexed section. */
+  section?: DocSection;
+  /** Present when a `#fragment` was given and could NOT be resolved. */
+  fragmentMiss?: { anchor: string; available: string[] };
+}
+
+/**
+ * Fetch the markdown of a doc page by its page URL or path.
+ *
+ * A `#fragment` returns just that section, with the heading path above it. Before this,
+ * the fragment was dropped in `mirrorUrl()` (it reads `URL.pathname`) and every result was
+ * the whole page — so `search_docs`, whose best results ARE section anchors, handed back an
+ * anchor that the very next call silently widened to 9 kB.
+ */
+export async function getDoc(pageUrl: string): Promise<DocResult> {
+  const asked = assertImqueueUrl(pageUrl);
+  const anchor = decodeURIComponent(asked.hash.replace(/^#/, "")).trim();
   const mUrl = mirrorUrl(pageUrl);
   const res = await get(mUrl);
 
@@ -722,14 +892,34 @@ export async function getDoc(
 
   const body = await res.text();
 
-  if (body.length > MAX_DOC_BYTES) {
+  // The fragment path first, so the size cap below applies to whatever is actually being
+  // returned — a section of a 200 kB page is not a truncated page.
+  if (anchor) {
+    const ranges = await loadSections(asked.origin);
+    const key = asked.pathname.endsWith("/") ? asked.pathname : `${asked.pathname}/`;
+    const page = ranges?.pages[key] ?? ranges?.pages[asked.pathname];
+    const cut = page ? sliceSection(body, page, anchor) : null;
+
+    if (cut) {
+      return { url: mUrl, markdown: cut.markdown, truncated: false, section: cut.section };
+    }
+
+    // Whole page, and SAY SO. An agent that mistypes an anchor and gets a plausible page
+    // back has been told its fragment worked, and will keep citing it.
     return {
       url: mUrl,
-      markdown: `${body.slice(0, MAX_DOC_BYTES)}\n\n[truncated: ${body.length} bytes total, `
-        + `${MAX_DOC_BYTES} returned. Read a specific page instead of the whole set.]`,
-      truncated: true,
+      markdown: capped(body),
+      truncated: body.length > MAX_DOC_BYTES,
+      fragmentMiss: { anchor, available: page ? Object.keys(page) : [] },
     };
   }
 
-  return { url: mUrl, markdown: body, truncated: false };
+  return { url: mUrl, markdown: capped(body), truncated: body.length > MAX_DOC_BYTES };
+}
+
+function capped(body: string): string {
+  if (body.length <= MAX_DOC_BYTES) return body;
+
+  return `${body.slice(0, MAX_DOC_BYTES)}\n\n[truncated: ${body.length} bytes total, `
+    + `${MAX_DOC_BYTES} returned. Read a specific page instead of the whole set.]`;
 }

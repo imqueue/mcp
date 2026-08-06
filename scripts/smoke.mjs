@@ -311,6 +311,42 @@ try {
     console.log(`${hit ? "✅" : "⚠️ "} get_doc (API reference)${hit ? "" : " — API markdown mirror unreachable"}`);
   } catch { console.log("⚠️  get_doc (API reference) skipped (no network)"); }
 
+  // A #fragment must return that section and nothing else. /api/ is 42 kB with 20 indexed
+  // anchors, and search_docs returns those anchors — so before slicing, following its own
+  // best result cost forty kilobytes to read four. Asserted against the LIVE feed because
+  // that is where the line ranges come from: a generator change shifting them by one line
+  // would still pass every unit test in this repo, whose ranges are fixtures.
+  try {
+    const part = await rpc(9, "tools/call", { name: "get_doc", arguments: { url: "https://imqueue.org/api/#service-and-client" } });
+    const whole = await rpc(10, "tools/call", { name: "get_doc", arguments: { url: "https://imqueue.org/api/" } });
+    const t = part.result?.content?.[0]?.text ?? "";
+    const partBytes = part.result?.structuredContent?.bytes ?? 0;
+    const wholeBytes = whole.result?.structuredContent?.bytes ?? 0;
+
+    check(
+      "a #fragment returns one section, with its heading path",
+      // The chain, the position notice, the section's own heading, and a real reduction —
+      // each of which has its own way of silently not happening.
+      t.includes("Section: API Reference › RPC API › Service and Client")
+        && /This is section \d+ of \d+ on the page/.test(t)
+        && t.includes("### Service and Client")
+        && partBytes > 0 && wholeBytes > partBytes * 4,
+      `section ${partBytes} B vs whole page ${wholeBytes} B`,
+    );
+
+    // An anchor that is not indexed must SAY so. Widening it to the whole page in silence
+    // teaches an agent to keep citing a fragment that does not exist.
+    const miss = await rpc(11, "tools/call", { name: "get_doc", arguments: { url: "https://imqueue.org/api/#no-such-heading" } });
+    const missText = miss.result?.content?.[0]?.text ?? "";
+
+    check(
+      "an unindexed fragment is reported, not silently widened",
+      missText.includes("#no-such-heading is not an indexed section")
+        && missText.includes("Indexed sections:"),
+      missText.split("\n").slice(1, 3).join(" / "),
+    );
+  } catch { console.log("⚠️  get_doc (fragment slicing) skipped (no network)"); }
+
   console.log(failures ? `\n${failures} offline check(s) FAILED` : "\nAll offline checks passed");
 } finally {
   proc.kill();
