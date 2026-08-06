@@ -317,8 +317,10 @@ try {
   // that is where the line ranges come from: a generator change shifting them by one line
   // would still pass every unit test in this repo, whose ranges are fixtures.
   try {
-    const part = await rpc(9, "tools/call", { name: "get_doc", arguments: { url: "https://imqueue.org/api/#service-and-client" } });
-    const whole = await rpc(10, "tools/call", { name: "get_doc", arguments: { url: "https://imqueue.org/api/" } });
+    // Ids 12+ : `waiters` is keyed by id and a repeat silently overwrites the earlier
+    // resolver, so reusing 9-11 here worked only because every call is awaited in order.
+    const part = await rpc(12, "tools/call", { name: "get_doc", arguments: { url: "https://imqueue.org/api/#service-and-client" } });
+    const whole = await rpc(13, "tools/call", { name: "get_doc", arguments: { url: "https://imqueue.org/api/" } });
     const t = part.result?.content?.[0]?.text ?? "";
     const partBytes = part.result?.structuredContent?.bytes ?? 0;
     const wholeBytes = whole.result?.structuredContent?.bytes ?? 0;
@@ -336,7 +338,7 @@ try {
 
     // An anchor that is not indexed must SAY so. Widening it to the whole page in silence
     // teaches an agent to keep citing a fragment that does not exist.
-    const miss = await rpc(11, "tools/call", { name: "get_doc", arguments: { url: "https://imqueue.org/api/#no-such-heading" } });
+    const miss = await rpc(14, "tools/call", { name: "get_doc", arguments: { url: "https://imqueue.org/api/#no-such-heading" } });
     const missText = miss.result?.content?.[0]?.text ?? "";
 
     check(
