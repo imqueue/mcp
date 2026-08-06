@@ -247,9 +247,22 @@ try {
     if (!results.length) {
       console.log("⚠️  search_docs (question ranking) skipped (no network)");
     } else {
+      // /api/faq/ accepted since 2026-08-06, when imqueue.org grew a page whose headings ARE
+      // these questions — this one is answered by
+      // /api/faq/#how-do-i-expose-a-service-method-so-it-can-be-called-remotely, verbatim. It
+      // took first place from rpc.expose/ and that is the page doing its job, not a regression:
+      // what this check guards, per the note above, is comparison essays and long blog posts
+      // winning. An FAQ answer is the opposite of that failure.
+      //
+      // NOT to be copied into imqueue.com's intent KPI set, which deliberately refuses
+      // /api/faq/ (see the `rules` note in scripts/search-kpi/data/intent-queries.json). That
+      // set exists to measure whether the REFERENCE page is reachable, and accepting the FAQ
+      // would score near 100% while hiding exactly what it was built to see. The difference is
+      // what each measures: the intent set asks "can an agent reach the signature", this asks
+      // "does a chat client get a usable first answer". Both are true, and neither generalises.
       check(
         "a question ranks the page that answers it first",
-        /\/api\/rpc\/latest\/rpc\.expose\/|\/tutorial\//.test(results[0].url),
+        /\/api\/rpc\/latest\/rpc\.expose\/|\/tutorial\/|\/api\/faq\//.test(results[0].url),
         results[0].url,
       );
       // Docs before blog whenever the docs cover the question. Not "no blog posts":
@@ -274,7 +287,22 @@ try {
 
     // A symbol whose NAME says nothing about the query, found through its
     // hand-written summary. This scored exactly zero before.
-    const sig = await res({ query: "SIGABRT", limit: 5 });
+    //
+    // `limit: 6`, not 5, and the reason is that 5 was never the right window: search_docs
+    // DEFAULTS to 6 (see the schema in src/server.ts), so this asked for one result fewer than
+    // any real client gets and was therefore strictly stricter than the tool it tests. It is
+    // also the project's own agent metric — recall@6, the number the ranker is tuned against.
+    //
+    // Measured when /api/faq/ shipped on 2026-08-06 and this began failing: handleSignals was
+    // at position 5 before the page existed and 6 after, so the assertion had been passing with
+    // a margin of exactly zero. The retrieval path it guards is fine — the three handleSignals
+    // symbols score 113.3, 111.4 and 110.8 against the leader's 151.9. What sits above them is
+    // the more interesting finding and is NOT this check's business: three package-INDEX
+    // sections (/api/job/latest/#remarks, /api/pg-pubsub/latest/#functions and #classes) beat
+    // every symbol page, because an index section quotes the summaries of everything beneath it
+    // and so matches any word they contain. That is the aggregate page outranking the specific
+    // one, recorded in imqueue.com's intent set as "the article ranks, the API does not".
+    const sig = await res({ query: "SIGABRT", limit: 6 });
     if (!sig.length) {
       console.log("⚠️  search_docs (summary-only match) skipped (no network)");
     } else {
