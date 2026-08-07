@@ -339,7 +339,31 @@ try {
     const chained = await rpc("tools/call", { name: "get_doc", arguments: { url: firstUrl } });
     const md = chained?.content?.[0]?.text ?? "";
     const meta = chained?.structuredContent ?? {};
-    check("get_doc consumes that url and returns the page", md.includes(firstUrl) && md.length > 0, `${md.length} chars`);
+    // What "consumes that url" has to mean, now that search_docs' best results are
+    // section anchors and get_doc honours them.
+    //
+    // This used to be `md.includes(firstUrl)`, and that only ever passed by accident:
+    // get_doc names the MIRROR it read (…/get-started/index.md), and the page URL
+    // happens to be a prefix of it, so `includes` was true without the assertion ever
+    // checking anything about the chain. A #fragment breaks the prefix — the mirror is
+    // …/api/faq/index.md and the query was …/api/faq/#how-do-i-… — so 3.4.0's own
+    // feature failed a check that had never tested it.
+    //
+    // Assert the page identity against the URL minus its fragment, and assert the
+    // slice separately, because the slice IS the chain's payoff: following the top
+    // result should cost the section, not the page.
+    const page = firstUrl.split("#")[0];
+    check("get_doc consumes that url and returns the page", md.includes(page) && md.length > 0, `${md.length} chars`);
+
+    if (firstUrl.includes("#")) {
+      const whole = await rpc("tools/call", { name: "get_doc", arguments: { url: page } });
+      const wholeLen = (whole?.content?.[0]?.text ?? "").length;
+      check(
+        "a chained anchor costs the section, not the page",
+        md.includes("Section: ") && md.length < wholeLen,
+        `${md.length} of ${wholeLen} chars (${Math.round((1 - md.length / wholeLen) * 100)}% less)`,
+      );
+    }
     // The page must appear exactly once across both fields.
     const structuredBytes = JSON.stringify(meta).length;
     check(
