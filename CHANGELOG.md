@@ -9,6 +9,32 @@ Keep each version's heading at `##` and use **bold** rather than `###` inside a
 section: the workflow's extractor stops at the next heading of three hashes or fewer,
 so a subheading would truncate the notes at that point.
 
+**Write the section before running `npm version`.** The release workflow reads
+CHANGELOG.md as it existed at the tag, so a section added afterwards is invisible to
+it and the release page silently takes the auto-generated fallback. That happened to
+3.4.1, whose notes had to be edited onto the page by hand.
+
+## 3.4.1
+
+**Nothing changed for you, and that is the whole entry.** The published package is
+byte-for-byte the 3.4.0 code — same unpacked size to the byte, and the only difference
+between the two tags is a test script that `files` does not ship. If you are on 3.4.0
+there is nothing here to upgrade for.
+
+It exists because 3.4.0's release ran every step except one: the hosted contract smoke
+failed a check, so the deploy step reported failure after npm, the registry and the
+Cloudflare Worker had all already updated. The check was wrong, not the server — it
+asserted that `get_doc` echoes back the URL you gave it, which had only ever been true
+because a page URL is a prefix of the mirror path get_doc names, so it passed for free
+without testing anything. 3.4.0's own feature broke the coincidence: a result URL now
+carries a `#fragment`, the mirror does not, and the substring stopped matching.
+
+It now asserts what the chain is for. Page identity is checked against the URL without
+its fragment, and the slice gets its own assertion — following `search_docs`' top
+result must cost the section, not the page, measured live at 2,215 of 39,945
+characters. 3.4.1 is the release that proved the corrected pipeline runs end to end
+with nothing failing.
+
 ## 3.4.0
 
 **`search_docs` now ranks with the same engine imqueue.org's own search uses.** It was
