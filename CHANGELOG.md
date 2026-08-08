@@ -14,6 +14,32 @@ CHANGELOG.md as it existed at the tag, so a section added afterwards is invisibl
 it and the release page silently takes the auto-generated fallback. That happened to
 3.4.1, whose notes had to be edited onto the page by hand.
 
+## 3.5.1
+
+**Nothing changed for you.** `files` is `["dist", "SPEC.md"]`, the fix is in
+`scripts/`, so the published tarball is the 3.5.0 code. If you are on 3.5.0 there is
+nothing here to upgrade for — as with 3.4.1, the version exists to record why it was
+cut.
+
+**The hosted contract check asserted the bug it was meant to catch.** 3.5.0 inverted
+two `get_doc` assertions — the schema check in each smoke suite — and missed a third:
+`remote-smoke.mjs` also compared the *values*, requiring `structuredContent` to
+serialize under 400 bytes on the grounds that "the page must appear exactly once
+across both fields". That is precisely the invariant 3.5.0 set out to remove. The
+deploy went through, the endpoint served the corrected shape, and the post-deploy
+smoke then failed on it: `the page is not duplicated into structuredContent —
+metadata 2249 B, reports bytes=1904`. A correct server, reported as a broken one.
+
+The check now asserts the same thing the schema does — that `markdown` arrives, is
+non-empty, and its length matches the reported `bytes`. Verified against the live
+endpoint at 3.5.0: `1904 B in markdown, reports bytes=1904`, all hosted checks
+passing, on the same page whose numbers appear in the failure above.
+
+**Why 3.5.0's gate did not see it:** `verify` runs `smoke`, not `smoke:remote` — the
+hosted suite needs a deployed endpoint, so `deploy-worker.mjs` runs it *after*
+publishing. Inverting an invariant therefore has to be done in both suites by hand,
+because only one of them can run before the release.
+
 ## 3.5.0
 
 **`get_doc` returned no page at all to a whole class of client, and said nothing about

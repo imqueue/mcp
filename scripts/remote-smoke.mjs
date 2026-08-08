@@ -365,12 +365,13 @@ try {
         `${md.length} of ${wholeLen} chars (${Math.round((1 - md.length / wholeLen) * 100)}% less)`,
       );
     }
-    // The page must appear exactly once across both fields.
-    const structuredBytes = JSON.stringify(meta).length;
+    // The page must appear in BOTH fields — see the schema check above. A client that
+    // renders structuredContent when present never reads `content`, so the duplication
+    // this used to forbid is what makes the tool work at all there.
     check(
-      "the page is not duplicated into structuredContent",
-      structuredBytes < 400 && typeof meta.bytes === "number" && meta.bytes > 0,
-      `metadata ${structuredBytes} B, reports bytes=${meta.bytes}`,
+      "the hosted body reaches structuredContent, not only content",
+      typeof meta.markdown === "string" && meta.markdown.length > 0 && meta.markdown.length === meta.bytes,
+      `${meta.markdown?.length ?? 0} B in markdown, reports bytes=${meta.bytes}`,
     );
   }
 
