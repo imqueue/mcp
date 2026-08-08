@@ -32,6 +32,7 @@
 // bundling the Worker. The copy in src/ is generated and gitignored; the copy in
 // dist/ is what ships.
 
+import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,11 +41,44 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SOURCE = join(ROOT, "vendor", "search-ranker", "ranker.js");
 const TARGETS = [join(ROOT, "src", "search-ranker.cjs"), join(ROOT, "dist", "search-ranker.cjs")];
 
-if (!existsSync(SOURCE)) {
+// POPULATE THE SUBMODULE RATHER THAN LECTURE ABOUT IT. Telling a human to run
+// `git submodule update --init` works; telling a build robot does not. The MCP
+// directories (glama.ai, Smithery and anyone else building from source) generate their
+// own Dockerfile around a plain `git clone` + `git checkout <sha>`, which leaves the
+// gitlink empty, and this script was the first thing to notice — so the published
+// server built fine from npm while every directory's build failed on the same line.
+//
+// We cannot edit their Dockerfile, so the repo has to be clonable the way they clone it.
+// The conditions are all met inside such a build: it IS a git checkout (they cloned it),
+// .gitmodules and the pinned SHA are in the tree, the submodule is public, and the step
+// has network — it just ran npm install. Nothing here fetches anything the build did not
+// already require: same URL, same pinned commit, same code the error message asked for.
+//
+// This runs only when the ranker is absent, so a populated checkout is never touched, and
+// a failure (no git, no network, a private-mirror clone) falls through to the message
+// below exactly as before.
+function populateSubmodule() {
+  // `.git` is a directory in a normal clone and a file in a worktree or submodule; both
+  // are checkouts. Neither exists in an unpacked tarball, where git cannot help us.
+  if (!existsSync(join(ROOT, ".git"))) return false;
+
+  try {
+    execFileSync("git", ["-C", ROOT, "submodule", "update", "--init", "vendor/search-ranker"], {
+      stdio: "inherit",
+    });
+  } catch {
+    return false;
+  }
+
+  return existsSync(SOURCE);
+}
+
+if (!existsSync(SOURCE) && !populateSubmodule()) {
   console.error(
     `The search ranker is missing: vendor/search-ranker/ranker.js\n\n`
       + "It is a git submodule (github.com/imqueue/search-ranker), and a plain `git clone`\n"
-      + "does not populate it. Run:\n\n"
+      + "does not populate it. This script just tried to populate it for you and could not —\n"
+      + "no git, no network, or this is not a git checkout. Run:\n\n"
       + "    git submodule update --init\n\n"
       + "or clone with `--recurse-submodules` next time.\n\n"
       + "If the directory IS populated and holds only search.js, the submodule is pinned to a\n"
