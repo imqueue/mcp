@@ -113,13 +113,14 @@ try {
   const missingSchema = WITH_SCHEMA.filter((n) => !tools.find((t) => t.name === n)?.outputSchema);
   check("shared tools declare an outputSchema", missingSchema.length === 0, missingSchema.join(", "));
 
-  // get_doc's schema is METADATA ONLY. If a `markdown`/`content`/`text` field ever
-  // appears in it, the page is being sent twice again — 33 kB to read one page.
+  // get_doc's schema MUST carry the page body. Without it, a client that renders
+  // structuredContent when present — which the spec entitles it to do, `content`
+  // being framed as the backwards-compatible mirror — gets a URL and a byte count
+  // and no page, and cannot tell that it read nothing.
   const docSchemaProps = Object.keys(tools.find((t) => t.name === "get_doc")?.outputSchema?.properties ?? {});
-  const bodyFields = docSchemaProps.filter((k) => ["markdown", "content", "text", "body"].includes(k));
   check(
-    "get_doc schema carries metadata, never the page body",
-    bodyFields.length === 0 && docSchemaProps.includes("url"),
+    "get_doc schema carries the page body, not just metadata",
+    docSchemaProps.includes("markdown") && docSchemaProps.includes("url"),
     docSchemaProps.join(", "),
   );
 
@@ -337,6 +338,20 @@ try {
     const t = doc.result?.content?.[0]?.text ?? "";
     const hit = t.includes("RedisQueue.send") && t.includes("**Signature:**");
     console.log(`${hit ? "✅" : "⚠️ "} get_doc (API reference)${hit ? "" : " — API markdown mirror unreachable"}`);
+
+    // Declaring `markdown` in the schema and actually filling it are two different
+    // things, and the gap between them is the whole bug this asserts against: a
+    // structuredContent-first client reads THIS field and never looks at `content`,
+    // so an empty one is a silently blank page rather than an error.
+    if (hit) {
+      const md = doc.result?.structuredContent?.markdown ?? "";
+
+      check(
+        "the page body reaches structuredContent, not only content",
+        md.includes("RedisQueue.send") && md.length === (doc.result?.structuredContent?.bytes ?? -1),
+        `${md.length} B in structuredContent.markdown`,
+      );
+    }
   } catch { console.log("⚠️  get_doc (API reference) skipped (no network)"); }
 
   // A #fragment must return that section and nothing else. /api/ is 42 kB with 20 indexed
@@ -364,6 +379,25 @@ try {
       `section ${partBytes} B vs whole page ${wholeBytes} B`,
     );
 
+    // The same fact as data. A structuredContent-first client never sees the header
+    // above, so without this it holds one section of twenty believing it holds the page.
+    const sec = part.result?.structuredContent?.section;
+
+    check(
+      "the heading path reaches structuredContent, not only content",
+      sec?.heading === "Service and Client"
+        && sec.ancestors.join(" › ") === "API Reference › RPC API"
+        && sec.index > 0 && sec.total > sec.index,
+      sec ? `${sec.index}/${sec.total} ${sec.heading}` : "absent",
+    );
+
+    // ...and absent on a whole-page read, or it means nothing when present.
+    check(
+      "a whole-page read carries no section",
+      whole.result?.structuredContent?.section === undefined,
+      JSON.stringify(whole.result?.structuredContent?.section ?? null),
+    );
+
     // An anchor that is not indexed must SAY so. Widening it to the whole page in silence
     // teaches an agent to keep citing a fragment that does not exist.
     const miss = await rpc(14, "tools/call", { name: "get_doc", arguments: { url: "https://imqueue.org/api/#no-such-heading" } });
@@ -374,6 +408,16 @@ try {
       missText.includes("#no-such-heading is not an indexed section")
         && missText.includes("Indexed sections:"),
       missText.split("\n").slice(1, 3).join(" / "),
+    );
+
+    const missed = miss.result?.structuredContent?.fragmentMiss;
+
+    check(
+      "the widening is reported in structuredContent too",
+      missed?.anchor === "no-such-heading"
+        && missed.available.length > 0
+        && (miss.result?.structuredContent?.bytes ?? 0) === wholeBytes,
+      missed ? `#${missed.anchor}, ${missed.available.length} available` : "absent",
     );
   } catch { console.log("⚠️  get_doc (fragment slicing) skipped (no network)"); }
 

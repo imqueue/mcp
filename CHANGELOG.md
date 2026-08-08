@@ -14,6 +14,46 @@ CHANGELOG.md as it existed at the tag, so a section added afterwards is invisibl
 it and the release page silently takes the auto-generated fallback. That happened to
 3.4.1, whose notes had to be edited onto the page by hand.
 
+## 3.5.0
+
+**`get_doc` returned no page at all to a whole class of client, and said nothing about
+it.** The page body travelled only in `content`; `structuredContent` carried metadata —
+`url`, `mimeType`, `bytes`, `truncated`. That reading of the spec is defensible in
+isolation, and it is wrong in practice: the spec frames `content` as the
+*backwards-compatible mirror* of the structured result ("a tool that returns structured
+content SHOULD also return the serialized JSON in a TextContent block"), so a client that
+declares structured support and renders `structuredContent` when it is present is
+behaving correctly. Against the old shape that client received a URL, a media type and a
+byte count, with no page attached.
+
+The failure was silent. No error, no `isError` — a well-formed result that looks like a
+successful read. For the one tool whose entire job is to stop an agent answering from
+recall, that is the worst available shape: the agent gets a citable URL and nothing
+behind it, then answers from recall anyway, now with a citation attached.
+
+**`structuredContent` now carries `markdown`,** the same body as `content`. The
+duplication is deliberate and it is not free — on `/api/rpc/latest/`, 16.6 kB of text
+plus 16.6 kB of structure, 33 kB to read one page. `bytes` and `truncated` are there so a
+caller can see that coming. A doubled page beats a silently empty one.
+
+**`section` and `fragmentMiss` join it,** for the same reason one field over. 3.4.0 put
+the heading path and the `section 3 of 20` notice in the `content` header, and a
+structuredContent-first client saw neither: it held one section of twenty believing it
+held the page, or asked for `#no-such-heading`, got all 42,498 bytes, and had no way to
+learn its fragment was never found. Both are now fields — `section{heading, ancestors,
+index, total}` and `fragmentMiss{anchor, available}` — present only when they apply, so
+a plain whole-page read still carries neither.
+
+**This affects the hosted endpoint identically**, which shares `src/server.ts`, and it
+reaches you there on redeploy rather than on upgrade.
+
+**Additive only.** Every existing field keeps its name and meaning, `content` is
+unchanged byte for byte, and a client reading the page out of `content` today needs no
+edit. The smoke suites previously asserted the *old* invariant — a body field in
+`get_doc`'s schema failed the publish gate — so the shape was locked in by the tests that
+were supposed to catch it; those assertions are inverted, and both the schema and the
+values it promises are now checked against the live docs.
+
 ## 3.4.1
 
 **Nothing changed for you, and that is the whole entry.** The published package is

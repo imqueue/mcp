@@ -203,7 +203,7 @@ failure). The five **shared** tools additionally declare an `outputSchema` and r
 | Tool | `structuredContent` |
 |---|---|
 | `search_docs` | `{ query, count, results[{title, section, description, url, symbol?}] }` |
-| `get_doc` | `{ url, mimeType, bytes, truncated }` — metadata only; the page body is in `content` and never repeated |
+| `get_doc` | `{ url, markdown, mimeType, bytes, truncated, section?{heading, ancestors[], index, total}, fragmentMiss?{anchor, available[]} }` — the body is in **both** `markdown` and `content`, deliberately: the spec frames `content` as the backwards-compatible mirror of the structured result, so a client that renders `structuredContent` when present is entitled to ignore `content`, and a metadata-only schema handed it a citable URL with no page behind it. `section` and `fragmentMiss` mirror the header lines for the same reason — they are what stops a slice being mistaken for the whole page |
 | `list_packages` | `{ packages[{name, install, summary, pick?}] }` |
 | `scaffold_service` | `{ service, install, files[{path, language, content}], types[], cliAlternative }` |
 | `scaffold_client` | `{ service, client, namespace, generateCommand, output, example{language, content} }` |

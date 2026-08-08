@@ -300,12 +300,13 @@ try {
   const noSchema = tools.filter((t) => !t.outputSchema).map((t) => t.name);
   check("every hosted tool declares an outputSchema", noSchema.length === 0, noSchema.join(", "));
 
-  // get_doc's schema is metadata only. A body field here means the page is being
-  // shipped twice — the one duplication that actually costs the caller context.
+  // get_doc's schema must carry the page body here too — the hosted server shares
+  // src/server.ts, so a metadata-only schema would strand every structuredContent-first
+  // client on the endpoint that exists precisely for zero-install clients.
   const docProps = Object.keys(tools.find((t) => t.name === "get_doc")?.outputSchema?.properties ?? {});
   check(
-    "get_doc schema carries metadata, never the page body",
-    !docProps.some((k) => ["markdown", "content", "text", "body"].includes(k)),
+    "get_doc schema carries the page body, not just metadata",
+    docProps.includes("markdown"),
     docProps.join(", "),
   );
 

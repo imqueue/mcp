@@ -391,30 +391,56 @@ function registerSharedTools(server: McpServer): void {
       inputSchema: {
         url: z.string().describe("An imqueue.org or imqueue.com page URL, e.g. https://imqueue.org/get-started/"),
       },
-      // METADATA ONLY — the page body is deliberately NOT in here.
+      // The page body travels in BOTH `content` and `structuredContent`, and the
+      // duplication is the point.
       //
-      // A schema obliges the server to send `structuredContent` (the SDK throws
-      // without it), but nothing says structuredContent must repeat what is in
-      // `content`. It describes the structured PART of the answer. So the page
-      // travels once, in `content`, and this box carries only the facts a caller
-      // would otherwise have to parse back out of the text or guess at.
+      // This schema used to be metadata only, on the reasoning that structuredContent
+      // need not repeat `content` and that every client reads `content` anyway. The
+      // second half is false. The spec frames `content` as the backwards-compatible
+      // mirror of the structured result — "a tool that returns structured content
+      // SHOULD also return the serialized JSON in a TextContent block" — so a client
+      // that declares structured support and renders `structuredContent` when present
+      // is behaving correctly, and against the old shape it received a URL, a
+      // mimetype and a byte count with no page attached. Silently: a well-formed
+      // result that looks like a successful read. For the one tool whose entire job
+      // is to stop an agent answering from recall, that is the worst failure
+      // available — the agent gets a citable URL and nothing to read behind it.
       //
-      // Putting `markdown` in here as well would have doubled the largest
-      // response the server can produce: measured on /api/rpc/latest/, 16.6 kB of
-      // text plus 16.6 kB of structure, 33 kB to read one page. There is no field
-      // below that costs more than a few dozen bytes, and no client has to read
-      // the body twice to get it.
-      //
-      // Note the absence of a body field is self-describing: a caller reading this
-      // schema sees url/mimeType/bytes and no content field, so it knows the page
-      // itself is in `content`. Which is where every client already looks.
+      // The cost is real and was measured: on /api/rpc/latest/, 16.6 kB of text plus
+      // 16.6 kB of structure, 33 kB to read one page. `bytes` and `truncated` exist
+      // so a caller can see that coming. A doubled page beats a silently empty one.
       outputSchema: {
         url: z.string().describe("The markdown mirror actually fetched — not always the URL passed in, which is why it is worth returning"),
-        mimeType: z.string().describe("Media type of the page body carried in content"),
+        markdown: z
+          .string()
+          .describe("The page body — the same text carried in content, minus the heading path prefix"),
+        mimeType: z.string().describe("Media type of the page body carried in markdown and content"),
         bytes: z.number().int().describe("Size of the page body, so a caller can decide before reading it"),
         truncated: z
           .boolean()
-          .describe("True when the page was too large to return whole — content holds the leading part only"),
+          .describe("True when the page was too large to return whole — markdown holds the leading part only"),
+
+        // Both of these mirror header lines that `content` has always carried, for the
+        // same reason `markdown` does. They answer "what am I actually holding?", and a
+        // caller that cannot answer it will mistake a slice for the page: `section` says
+        // this is one of many, `fragmentMiss` says you asked for a slice and got the lot.
+        // Absent on a plain whole-page read, which is the case where neither applies.
+        section: z
+          .object({
+            heading: z.string().describe("The section's own heading"),
+            ancestors: z.array(z.string()).describe("Headings above it, outermost first — the path that says which 'Verify' this is"),
+            index: z.number().int().describe("1-based position among the page's indexed sections"),
+            total: z.number().int().describe("How many indexed sections the page has, so a caller can see what it did not read"),
+          })
+          .optional()
+          .describe("Present when a #fragment resolved to one section — markdown is that section, not the page"),
+        fragmentMiss: z
+          .object({
+            anchor: z.string().describe("The #fragment that was asked for and not found"),
+            available: z.array(z.string()).describe("Anchors the page does index, for a retry"),
+          })
+          .optional()
+          .describe("Present when a #fragment matched no indexed section — markdown is the WHOLE page, not the slice that was asked for"),
       },
     },
     async ({ url }) => {
@@ -424,8 +450,11 @@ function registerSharedTools(server: McpServer): void {
         // The header, and it is load-bearing rather than decorative. A section arrives with
         // no surrounding page, so without the heading path a caller cannot tell whether
         // "Verify" belongs to the delayed-work recipe or the auth tutorial, and without the
-        // count it cannot tell that eleven more sections exist. Both go in `content`: the
-        // output schema is part of the frozen listing surface, so nothing is added to it.
+        // count it cannot tell that eleven more sections exist.
+        //
+        // It prefixes `content`, and the same facts go out as `section`/`fragmentMiss`
+        // in structuredContent — prose for the client that reads text, fields for the
+        // one that reads data, neither of them guessing.
         const lines = [`Source: ${doc.url}`];
 
         if (doc.section) {
@@ -455,9 +484,12 @@ function registerSharedTools(server: McpServer): void {
           content: [{ type: "text" as const, text: `${lines.join("\n")}\n\n${doc.markdown}` }],
           structuredContent: {
             url: doc.url,
+            markdown: doc.markdown,
             mimeType: "text/markdown",
             bytes: doc.markdown.length,
             truncated: doc.truncated,
+            ...(doc.section ? { section: doc.section } : {}),
+            ...(doc.fragmentMiss ? { fragmentMiss: doc.fragmentMiss } : {}),
           },
         };
       } catch (e) {
