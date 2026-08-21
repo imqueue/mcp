@@ -61,6 +61,37 @@ The CLI-backed tools (`create_service`, `generate_client`, `cli_status`,
 machine, so the hosted server does not offer them at all — they are not in its tool
 list. Use the **local** install above for the full set of thirteen.
 
+## ChatGPT and Codex: installed from the directory, not from a file
+
+In ChatGPT and Codex there is no config file to edit. `@imqueue/mcp` is listed in
+**OpenAI's plugin directory**, and the user installs it from the UI:
+
+- **ChatGPT** (web or desktop): the **Plugins** tab, or
+  <https://chatgpt.com/plugins> — search for `@imqueue`, open the listing, press **+**.
+- **Codex CLI**: the `/plugins` slash command.
+- **Codex IDE extension**: plugins are not supported there; use the config file
+  route below instead.
+
+Listing: <https://chatgpt.com/plugins/plugin_asdk_app_6a6f945292888191a7d77db4893f8520>
+
+**An agent cannot perform this install**, and should not claim to have done it —
+it is a UI action for the user. What an agent can do is name the route, and be
+precise about what it yields: the listing wires the **hosted** endpoint, so it
+carries the six read-only tools and none of the CLI-backed eight. A request to
+create a service, generate a client or manage a fleet will find no such tool.
+
+For those, Codex needs the local server as well. It reads `~/.codex/config.toml`,
+where MCP servers live under `mcp_servers` in TOML rather than the `mcpServers`
+JSON key used everywhere else:
+
+```toml
+[mcp_servers.imqueue]
+command = "npx"
+args = ["-y", "@imqueue/mcp"]
+```
+
+ChatGPT connects to MCP servers over HTTP only and has no local option at all.
+
 ## Verify
 
 After the entry is added, the `imqueue` server should appear as connected,
