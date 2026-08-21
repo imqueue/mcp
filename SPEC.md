@@ -232,7 +232,7 @@ own voice.
 | **Cline marketplace** | `llms-install.md` (this repo, current). | **absent**; optional, since it already works from a repo URL |
 | **Cursor / VS Code directories** | The GitHub/VS Code gallery pulls from the official registry. | expected to arrive on its own |
 | **Anthropic Connectors Directory** | No auth, six read-only tools with hints, privacy + terms + docs pages all 200. | technically ready; blocked on a non-technical prerequisite — the portal needs a Team/Enterprise org with directory-management access |
-| **OpenAI apps** | Domain-verification token live at `/.well-known/openai-apps-challenge`. | **draft, under review** — the reason this branch does not publish |
+| **OpenAI plugin directory** (the App directory, renamed July 2026 — one directory for ChatGPT *and* Codex) | Domain-verification token live at `/.well-known/openai-apps-challenge`; the listing wires the hosted endpoint. | **done** (verified 2026-08-21) — accepted and live at `chatgpt.com/plugins/plugin_asdk_app_6a6f945292888191a7d77db4893f8520`. It installs the hosted six, so a Codex user who wants the CLI bridge still needs the local server; both are documented on `/mcp/installation/#chatgpt-codex` |
 | **imqueue.org** | "MCP server" section on `/using-ai-assistants/` with the install snippet. | **done** |
 
 Install snippet promoted everywhere:

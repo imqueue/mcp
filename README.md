@@ -2,7 +2,7 @@
 
 [![smithery badge](https://smithery.ai/badge/mikhus/imqueue)](https://smithery.ai/servers/mikhus/imqueue)
 
-A [Model Context Protocol](https://modelcontextprotocol.io) server for **[@imqueue](https://imqueue.org)**. It lets AI coding agents (Claude Code, Cursor, VS Code, JetBrains, …) **search the @imqueue documentation**, **scaffold typed services & clients**, and **drive the `imq` CLI** — so they generate correct, idiomatic @imqueue code instead of guessing.
+A [Model Context Protocol](https://modelcontextprotocol.io) server for **[@imqueue](https://imqueue.org)**. It lets AI coding agents (Claude Code, ChatGPT, Codex, Cursor, VS Code, JetBrains, …) **search the @imqueue documentation**, **scaffold typed services & clients**, and **drive the `imq` CLI** — so they generate correct, idiomatic @imqueue code instead of guessing.
 
 📖 **Full documentation: [imqueue.org/mcp](https://imqueue.org/mcp/)** — per-client setup, complete tools reference, agent workflows and the safety model.
 
@@ -61,6 +61,20 @@ npx -y @imqueue/mcp
 claude mcp add imqueue -- npx -y @imqueue/mcp
 ```
 
+### ChatGPT & Codex
+
+@imqueue is listed in **[OpenAI's plugin directory](https://chatgpt.com/plugins/plugin_asdk_app_6a6f945292888191a7d77db4893f8520)** — shared by ChatGPT and Codex. In ChatGPT, open the **Plugins** tab and install it; in the Codex CLI, run `/plugins`. No config file, no Node.
+
+That route installs the **hosted** server, so it is the six read-only tools and none of the CLI bridge (see [below](#hosted-server-no-install)). Codex can run the local server alongside it — MCP servers live under `mcp_servers` in `~/.codex/config.toml`, in TOML rather than the usual JSON:
+
+```toml
+[mcp_servers.imqueue]
+command = "npx"
+args = ["-y", "@imqueue/mcp"]
+```
+
+ChatGPT connects to MCP servers over HTTP only, so it has no local option; the plugin is all of it there.
+
 ### Other clients (Cursor, Claude Desktop, JetBrains, Windsurf, Zed, …)
 
 Add to your MCP config (`.cursor/mcp.json`, `claude_desktop_config.json`, …):
@@ -86,7 +100,7 @@ If your client supports remote MCP servers and you only need docs and scaffoldin
 { "mcpServers": { "imqueue": { "url": "https://mcp.imqueue.org/mcp" } } }
 ```
 
-It serves six tools, **all read-only**: the five above plus `local_install_guide`, which returns the setup steps for the local install.
+It serves six tools, **all read-only**: the five above plus `local_install_guide`, which returns the setup steps for the local install. This is also what [OpenAI's plugin directory](#chatgpt--codex) installs for ChatGPT and Codex — the same endpoint under the same limits, packaged as one click.
 
 **It does not offer the CLI-backed tools, by design.** Those act on *your* machine — your project files, your running services, your CLI config — which a server running on Cloudflare's edge cannot reach. Advertising them there would mean listing tools that can never do what their names say, so they are not registered at all in remote mode. If you need them, install locally.
 
