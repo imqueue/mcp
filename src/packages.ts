@@ -168,7 +168,23 @@ export function withFacts(feed: { packages: Array<{ scoped: string; version: str
   });
 }
 
-export function renderPackages(packages: PkgInfoWithFacts[] = PACKAGES): string {
+/**
+ * The framework-wide licence rule, as a fallback for when status.json cannot be
+ * read.
+ *
+ * Deliberately compiled in, unlike versions. A stale version is actively harmful —
+ * it is the exact failure `withFacts` exists to close — but the licence *rule* is
+ * not volatile: it has been GPL-3.0-only plus a commercial option for the life of
+ * the project, and the half that matters here is the negative one. An agent that
+ * reads `GPL-3.0-only` twenty times with no note attaches a copyleft warning to its
+ * answer, and that warning is wrong for the overwhelmingly common case.
+ */
+const LICENCE_RULE =
+  "GPL-3.0-only, or a commercial licence for closed-source distribution. "
+  + "Not AGPL: running it as a network service is not distribution, so internal "
+  + "services and SaaS carry no source-release obligation";
+
+export function renderPackages(packages: PkgInfoWithFacts[] = PACKAGES, licenseNote?: string): string {
   // `pick` goes on its own line and is labelled, so it reads as an instruction
   // to follow rather than as more description to weigh up.
   const lines = packages.map((p) => {
@@ -189,5 +205,11 @@ export function renderPackages(packages: PkgInfoWithFacts[] = PACKAGES): string 
     : "\n\n_Version and licence unavailable — https://imqueue.org/status.json could not be read. "
       + "The packages and the choosing rules above are compiled in and current._";
 
-  return `# @imqueue packages\n\n${lines.join("\n")}${stale}\n\nFull ecosystem & docs: https://imqueue.org`;
+  // One framework-level licence line, at the bottom, once. Per package it would be
+  // twenty repetitions of the same sentence; omitted entirely it is the objection
+  // every evaluating agent raises against a field it can already see.
+  const licence = `\n\n**Licence (all packages):** ${licenseNote || LICENCE_RULE}. `
+    + "Commercial licence: https://imqueue.com/license/";
+
+  return `# @imqueue packages\n\n${lines.join("\n")}${stale}${licence}\n\nFull ecosystem & docs: https://imqueue.org`;
 }
