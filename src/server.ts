@@ -22,6 +22,7 @@ import { z } from "zod";
 
 import { searchDocs, getDoc, suggest, setUserAgent } from "./docs.js";
 import { renderPackages, PACKAGES, exclusiveAdvisories } from "./packages.js";
+import { toCurrentDialect } from "./schema-dialect.js";
 import {
   scaffoldService,
   scaffoldClient,
@@ -897,5 +898,56 @@ export function createServer(opts: { version: string; mode: Mode; cli?: CliHandl
     registerInstallGuide(server);
   }
 
+  relabelSchemaDialect(server);
+
   return server;
+}
+
+/**
+ * Relabel every advertised schema as JSON Schema 2020-12 on the way out.
+ *
+ * The SDK hard-codes draft-07 and exposes no option to change it (the full account
+ * is in src/schema-dialect.ts, along with why relabelling is truthful here). The
+ * conversion happens inside the SDK's own `tools/list` handler, so this wraps that
+ * handler rather than replacing it — replacing would mean reimplementing the tool
+ * registry's rendering, which is the part worth keeping.
+ *
+ * `_requestHandlers` is private. It is reached through `server.server`, which the
+ * SDK documents as the escape hatch for exactly this kind of thing, and the lookup
+ * throws rather than silently doing nothing if the field ever moves — because a
+ * relabeller that quietly stops relabelling puts us back where we started, with
+ * five dead tools and a green build. schema-dialect.test.ts reads the result off
+ * the wire, so a broken patch fails there too.
+ */
+function relabelSchemaDialect(server: McpServer): void {
+  const handlers = (server.server as unknown as { _requestHandlers?: Map<string, RequestHandler> })
+    ._requestHandlers;
+  const inner = handlers?.get("tools/list");
+
+  if (!inner) {
+    throw new Error(
+      "schema dialect: no tools/list handler to wrap — the SDK's internals have moved. " +
+        "See src/schema-dialect.ts; without this the server advertises draft-07 and " +
+        "every tool with an outputSchema is refused by strict clients.",
+    );
+  }
+
+  handlers!.set("tools/list", async (request, extra) => {
+    const result = (await inner(request, extra)) as { tools?: AdvertisedTool[] };
+
+    for (const tool of result.tools ?? []) {
+      if (tool.inputSchema) toCurrentDialect(tool.inputSchema, tool.name);
+      if (tool.outputSchema) toCurrentDialect(tool.outputSchema, tool.name);
+    }
+
+    return result;
+  });
+}
+
+type RequestHandler = (request: unknown, extra: unknown) => Promise<unknown>;
+
+interface AdvertisedTool {
+  name: string;
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
 }
