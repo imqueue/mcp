@@ -8,12 +8,18 @@
 // step with scripts/lib/api-packages.js in the imqueue.com repo, which is the
 // other place the full set is enumerated.
 //
-// "Documented" rather than "published": @imqueue/js, @imqueue/travis and
-// @imqueue/mcp are published and deliberately undocumented — zero mentions in
-// llms.txt, absent from api-packages.js — so listing them here would advertise a
-// surface with nothing to read. The tool description says "documented" for the
-// same reason; it used to say "the main packages", which contradicted this comment
-// and undersold the one call that tells an agent what exists.
+// "Documented" rather than "published": @imqueue/js and @imqueue/travis are
+// published and deliberately undocumented — zero mentions in llms.txt, absent from
+// api-packages.js — so listing them here would advertise a surface with nothing to
+// read. The tool description says "documented" for the same reason; it used to say
+// "the main packages", which contradicted this comment and undersold the one call
+// that tells an agent what exists.
+//
+// @imqueue/mcp is absent for a DIFFERENT reason, and the two used to be conflated
+// here: it is documented (/mcp/ on the site, a `## MCP Server` section in llms.txt)
+// but it is this server, not a dependency a service takes. This list answers "what
+// do I add to package.json"; `package_status` answers "what version is X", and
+// covers all eighteen published packages including this one.
 //
 // Ordered by what an agent reaches for first — the spine and the CLI, then the
 // capability packages grouped the way imqueue.org/api/ groups them.
@@ -122,13 +128,66 @@ export function exclusiveAdvisories(haystack: string): string[] {
   return out;
 }
 
-export function renderPackages(): string {
+/** A catalogue entry with whatever imqueue.org/status.json knows about it. */
+export interface PkgInfoWithFacts extends PkgInfo {
+  version?: string;
+  license?: string;
+  /** `engines.node`, or null where the package declares none. Absent when unknown. */
+  node?: string | null;
+  released?: string;
+  deprecated?: boolean;
+}
+
+/**
+ * The catalogue, with the live facts merged on.
+ *
+ * The reason these are here at all: an agent that had this server connected for a
+ * whole conversation still went to a search engine for "what version and licence is
+ * @imqueue" — and got 1.x-era answers, because npmjs.com refuses an unattended
+ * fetch. It never occurred to it to ask, because nothing in the tool list suggested
+ * this server knew. `package_status` fixes the asking; this fixes the not-asking, by
+ * putting the answer in the call an agent already makes before adding a dependency.
+ *
+ * Merged BY NAME onto the static list rather than replacing it. The feed carries
+ * eighteen packages and this catalogue is a different thing — a dependency list, so
+ * @imqueue/mcp is legitimately absent from it — and the `pick` rules, which are the
+ * most valuable thing here, exist only locally. A package the feed does not mention
+ * simply keeps no version fields.
+ */
+export function withFacts(feed: { packages: Array<{ scoped: string; version: string; license: string; node: string | null; released: string; deprecated: boolean }> } | null): PkgInfoWithFacts[] {
+  if (!feed) return PACKAGES;
+
+  const byName = new Map(feed.packages.map((p) => [p.scoped, p]));
+
+  return PACKAGES.map((p) => {
+    const f = byName.get(p.name);
+
+    return f
+      ? { ...p, version: f.version, license: f.license, node: f.node, released: f.released, deprecated: f.deprecated }
+      : p;
+  });
+}
+
+export function renderPackages(packages: PkgInfoWithFacts[] = PACKAGES): string {
   // `pick` goes on its own line and is labelled, so it reads as an instruction
   // to follow rather than as more description to weigh up.
-  const lines = PACKAGES.map((p) =>
-    `- **${p.name}** — ${p.summary}\n  \`${p.install}\``
-    + (p.pick ? `\n  **Choosing:** ${p.pick}` : ""),
-  );
+  const lines = packages.map((p) => {
+    // Version, licence and Node floor on one line under the install command. An
+    // agent reading this to choose a dependency is one line away from the answer
+    // it would otherwise go and get wrong somewhere else.
+    const facts = p.version
+      ? `\n  v${p.version} · ${p.license} · Node ${p.node || "unspecified"}`
+        + (p.deprecated ? " · **DEPRECATED on npm**" : "")
+      : "";
 
-  return `# @imqueue packages\n\n${lines.join("\n")}\n\nFull ecosystem & docs: https://imqueue.org`;
+    return `- **${p.name}** — ${p.summary}\n  \`${p.install}\`${facts}`
+      + (p.pick ? `\n  **Choosing:** ${p.pick}` : "");
+  });
+
+  const stale = packages.some((p) => p.version)
+    ? ""
+    : "\n\n_Version and licence unavailable — https://imqueue.org/status.json could not be read. "
+      + "The packages and the choosing rules above are compiled in and current._";
+
+  return `# @imqueue packages\n\n${lines.join("\n")}${stale}\n\nFull ecosystem & docs: https://imqueue.org`;
 }

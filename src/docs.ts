@@ -168,6 +168,96 @@ export function parseLlmsTxt(text: string, sectionSuffix = ""): DocEntry[] {
  * the three imqueue.com pages the org feed already lists keep their org
  * descriptions and nothing appears twice.
  */
+/** One package, as https://imqueue.org/status.json reports it. */
+export interface PackageStatus {
+  name: string;
+  scoped: string;
+  version: string;
+  license: string;
+  /** `engines.node`, or null where the package declares none. */
+  node: string | null;
+  released: string;
+  firstRelease: string;
+  releases: number;
+  majors: number[];
+  deprecated: boolean;
+  install: string;
+  docs: string;
+  npm: string;
+  repo: string;
+  summary: string;
+}
+
+/** Facts true of the framework rather than of one package. */
+export interface FrameworkStatus {
+  license: string;
+  licenseNote: string;
+  commercial: string;
+  node: string;
+  redis: string;
+}
+
+export interface StatusFeed {
+  about: string;
+  source: string;
+  generated: string;
+  framework: FrameworkStatus;
+  packages: PackageStatus[];
+}
+
+let statusCache: { at: number; feed: StatusFeed } | null = null;
+
+/**
+ * What every published @imqueue package currently IS — version, licence, Node floor,
+ * release date.
+ *
+ * WHY THIS IS FETCHED AND NOT COMPILED IN. An agent evaluating @imqueue cannot read
+ * npmjs.com: it serves bot detection to an unattended fetch, so the agent falls back
+ * to search snippets cached from the 1.x era and reports ISC and Node 8. Baking the
+ * numbers into this package would reproduce the same failure more slowly — @imqueue
+ * releases weekly and this server does not, so a compiled-in version is wrong within
+ * days and wrong with total confidence.
+ *
+ * imqueue.org reads the npm registry at build time and republishes the answer, which
+ * is the copy anything can actually fetch. Same choke point as every other feed here:
+ * host allowlist, 5s timeout, our user-agent, one-hour cache, stale-on-error.
+ *
+ * Returns null rather than throwing. The tools that use it can still answer without
+ * it — `list_packages` has its catalogue compiled in — and a docs server that stops
+ * listing packages because a JSON file was briefly unreachable would be a worse
+ * failure than a missing version field, which the callers report explicitly.
+ */
+export async function loadStatus(): Promise<StatusFeed | null> {
+  if (statusCache && Date.now() - statusCache.at < TTL_MS) return statusCache.feed;
+
+  try {
+    const res = await get(`${SITE}/status.json`);
+
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    const feed = (await res.json()) as StatusFeed;
+
+    if (!Array.isArray(feed?.packages) || !feed.packages.length) {
+      throw new Error("no packages in the feed");
+    }
+
+    statusCache = { at: Date.now(), feed };
+
+    return feed;
+  } catch (e) {
+    // A stale copy beats none, exactly as in loadIndex/loadCorpus: yesterday's
+    // version number is very nearly right, and "unknown" is what sends an agent
+    // back to the search engine this feed exists to replace.
+    if (statusCache) return statusCache.feed;
+
+    console.error(
+      `[status] could not read ${SITE}/status.json (${e instanceof Error ? e.message : String(e)})`,
+    );
+
+    return null;
+  }
+}
+
 export async function loadIndex(): Promise<DocEntry[]> {
   if (indexCache && Date.now() - indexCache.at < TTL_MS) return indexCache.entries;
 

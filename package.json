@@ -21,7 +21,7 @@
     "type": "git",
     "url": "git+https://github.com/imqueue/mcp.git"
   },
-  "license": "GPL-3.0",
+  "license": "GPL-3.0-only",
   "author": "imqueue.com <support@imqueue.com>",
   "type": "module",
   "bin": {
@@ -43,6 +43,7 @@
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
     "verify": "npm run build && npm run typecheck:worker && npm run typecheck:test && npm test && npm run smoke",
     "smoke": "node scripts/smoke.mjs",
+    "check:ranker-engine": "node scripts/check-ranker-engine.mjs",
     "smoke:remote": "node scripts/remote-smoke.mjs",
     "version": "node scripts/sync-version.mjs && git add server.json",
     "prepublishOnly": "npm run verify",

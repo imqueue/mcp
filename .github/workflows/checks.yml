@@ -60,3 +60,16 @@ jobs:
       - run: npm run typecheck:test
 
       - run: npm test
+
+      # NETWORKED, which is why it lives here and not in `npm test` or `npm run
+      # verify` — those are the pre-publish gate and should not need GitHub to be up.
+      #
+      # `npm run smoke` is deliberately excluded from this workflow (a blog post
+      # published in another repo could turn it red), so this is the only thing in CI
+      # that looks across the repository boundary at all. It compares ENGINE_V and not
+      # the SHA: a UI-only commit to search.js never turns it red, and when it does go
+      # red it means this server would rank the live feeds differently from
+      # imqueue.org's own search box.
+      - name: npm run check:ranker-engine (does the pinned engine still match master?)
+        if: always()
+        run: npm run check:ranker-engine

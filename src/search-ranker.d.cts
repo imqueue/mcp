@@ -116,6 +116,16 @@ declare const ranker: {
   state: RankerState;
   /** The feed shape this ranker reads. Asserted against the feeds it is given. */
   FEED_V: number;
+  /**
+   * The ranking BEHAVIOUR of this engine, moved only when its answers move.
+   *
+   * Optional because a pin predating its introduction has no such export, and the
+   * comparison degrades to "cannot tell" rather than to a crash. Everything else in
+   * this file is required, and imqueue.com's check-search-ranker.js asserts the
+   * required list against the engine's real exports — TypeScript cannot catch a lie
+   * in a hand-written .d.cts.
+   */
+  ENGINE_V?: number;
 };
 
 export = ranker;

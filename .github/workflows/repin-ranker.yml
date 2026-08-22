@@ -1,0 +1,168 @@
+name: Repin the search ranker
+
+# Keeps vendor/search-ranker current, and splits by whether the ranker's ANSWERS
+# changed.
+#
+# Why it exists. The ranker is github.com/imqueue/search-ranker, pinned here and
+# pinned separately by imqueue.com — which takes ranker.js and search.js, while this
+# server takes ranker.js alone. Because the two consume different halves and pin by
+# COMMIT, the pins fall out of step on a commit to either half. In August 2026 they
+# sat a fortnight apart with nothing red in either repo, and it was harmless purely
+# by luck: the divergent commit was in search.js, which this server never copies.
+# The mechanism holding it together was "somebody remembers to update two pointers
+# in two repositories", which is not a mechanism.
+#
+# A SCHEDULE, not a fan-out. No workflow in this org sends a repository_dispatch —
+# the only sender is the cli repo's postpublish npm hook, firing from a laptop — and
+# imqueue.com's refresh-api-docs.yml states the reasoning in its own header: a
+# schedule needs nothing from the other repo, so it cannot be forgotten. The
+# dispatch trigger below is a latency optimisation and nothing depends on it.
+#
+# THE ASYMMETRY WITH imqueue.com. There, a pin that changes no behaviour is
+# committed automatically, because the site deploys from a git push. Here it cannot
+# be: a repin reaches production only through `npm publish` and `wrangler deploy`,
+# which are the two things a bot must not do unattended. So this job commits the
+# bookkeeping repin but says plainly in the issue — and in the commit message — that
+# the deployed server is unchanged until someone releases.
+
+on:
+  schedule:
+    # 05:55 UTC daily, after imqueue.com's repin job at 05:40, so the site has
+    # usually taken the same commit before this one reports on it.
+    - cron: "55 5 * * *"
+  repository_dispatch:
+    types: [ranker-updated]
+  workflow_dispatch:
+
+concurrency:
+  group: repin-ranker
+  cancel-in-progress: false
+
+jobs:
+  repin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # REQUIRED: the whole job is about this submodule, and copy-ranker.mjs
+          # exits 1 without it.
+          submodules: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Move the pin to search-ranker@master
+        id: pin
+        run: |
+          set -euo pipefail
+
+          engine_v() {
+            sed -n 's/^[[:space:]]*var ENGINE_V = \([0-9][0-9]*\);.*/\1/p' vendor/search-ranker/ranker.js | head -1
+          }
+
+          before_sha="$(git -C vendor/search-ranker rev-parse HEAD)"
+          before_v="$(engine_v)"
+
+          git submodule update --remote vendor/search-ranker
+
+          after_sha="$(git -C vendor/search-ranker rev-parse HEAD)"
+          after_v="$(engine_v)"
+
+          {
+            echo "before_sha=$before_sha"
+            echo "after_sha=$after_sha"
+            echo "before_v=$before_v"
+            echo "after_v=$after_v"
+            echo "moved=$([ "$before_sha" != "$after_sha" ] && echo true || echo false)"
+            echo "engine_moved=$([ "$before_v" != "$after_v" ] && echo true || echo false)"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "pin     $before_sha -> $after_sha"
+          echo "engine  v${before_v:-?} -> v${after_v:-?}"
+
+      - name: Nothing moved
+        if: steps.pin.outputs.moved != 'true'
+        run: echo "vendor/search-ranker is already at master — nothing to do."
+
+      # Not `npm run verify`: that ends in `npm run smoke`, which asserts ranking
+      # against the LIVE site. If the engine just changed, the site may not have
+      # taken the same commit yet, and a red smoke here would say nothing about this
+      # repo. The publish gate still runs it, at the point where it means something.
+      - name: Build and test against the new pin
+        id: verify
+        if: steps.pin.outputs.moved == 'true'
+        continue-on-error: true
+        run: |
+          set +e
+          { npm run build && npm run typecheck:worker && npm run typecheck:test && npm test; } > /tmp/verify.log 2>&1
+          echo "status=$?" >> "$GITHUB_OUTPUT"
+          tail -25 /tmp/verify.log
+
+      - name: Commit the repin
+        id: commit
+        if: steps.pin.outputs.moved == 'true' && steps.verify.outputs.status == '0'
+        run: |
+          set -euo pipefail
+
+          if [ "${{ steps.pin.outputs.engine_moved }}" = "true" ]; then
+            note="ENGINE_V moved v${{ steps.pin.outputs.before_v }} -> v${{ steps.pin.outputs.after_v }}: this engine ANSWERS
+          queries differently. The deployed server does NOT have it — a repin reaches
+          production only through npm publish and wrangler deploy — so search_docs keeps
+          ranking with the old engine until someone releases. The tracking issue says so."
+          else
+            note="ENGINE_V held at v${{ steps.pin.outputs.after_v }}, so the engine answers every query exactly
+          as before — this is the UI half, a README or a comment. Taken automatically to
+          stop the pin drifting from imqueue.com's."
+          fi
+
+          git config user.name "imqueue-bot"
+          git config user.email "bot@imqueue.com"
+          git add -- vendor/search-ranker
+          git commit -m "chore(ranker): repin to ${{ steps.pin.outputs.after_sha }}
+
+          $note
+
+          build, both typechecks and the test suite passed against the new pin. smoke was
+          NOT run: it asserts ranking against the live imqueue.org, which may not have
+          taken the same commit yet, so a failure there would say nothing about this repo.
+          The publish gate runs it."
+          git push
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # An issue when a release is needed, or when the new pin does not build.
+      # Deliberately NOT for a routine bookkeeping repin: an issue per no-op commit
+      # is how a label gets muted.
+      - name: Open or update the tracking issue
+        if: steps.pin.outputs.moved == 'true' && (steps.pin.outputs.engine_moved == 'true' || steps.verify.outputs.status != '0')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if [ "${{ steps.verify.outputs.status }}" != "0" ]; then
+            body=$(printf 'search-ranker moved to `%s` and the build failed against it, so the pin was NOT taken.\n\n```\n%s\n```\n' \
+              "${{ steps.pin.outputs.after_sha }}" "$(tail -25 /tmp/verify.log 2>/dev/null || echo '(not run)')")
+            title="search-ranker: the new pin does not build"
+          else
+            body=$(printf 'search-ranker moved to engine **v%s** (from v%s) and the pin has been taken on main in `%s`.\n\n**The deployed server does not have it yet.** A repin only reaches production through a publish, so until then:\n\n- `search_docs` on https://mcp.imqueue.org/mcp ranks with engine v%s\n- imqueue.org builds its feeds with whatever it has pinned\n- the runtime check in `src/ranker.ts` logs `[ranker] … was built by engine v…` on every mismatched feed, and the Worker stamps `ranker_stale` on its telemetry\n\nTo close the gap:\n\n```\nnpm run verify\nnpm version minor && git push --follow-tags && npm publish\n```\n\nimqueue.com owns the measurement — read its paired KPI result before treating a ranking change as an improvement.\n' \
+              "${{ steps.pin.outputs.after_v }}" "${{ steps.pin.outputs.before_v }}" "${{ steps.commit.outputs.sha }}" "${{ steps.pin.outputs.before_v }}")
+            title="search-ranker: engine v${{ steps.pin.outputs.after_v }} needs a release"
+          fi
+
+          existing=$(gh issue list --state open --label ranker-pin --limit 1 --json number --jq '.[0].number')
+
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh label create ranker-pin --description "The pinned search ranker needs a decision" --color ededed 2>/dev/null || true
+            gh issue create --title "$title" --label ranker-pin --body "$body"
+          fi

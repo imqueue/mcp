@@ -9,9 +9,9 @@ hallucinating an API. This is the GEO (Generative Engine Optimization) counterpa
 to SEO: instead of ranking in a search page, we rank **at code-time**, inside the
 tools developers already use.
 
-Three capabilities, thirteen tools locally:
+Three capabilities, fourteen tools locally:
 
-- **Docs access** — `search_docs`, `get_doc`, `list_packages`
+- **Docs access** — `search_docs`, `get_doc`, `list_packages`, `package_status`
 - **Offline scaffolding** — `scaffold_service`, `scaffold_client` (templates, no deps)
 - **CLI bridge** — `cli_status`, `cli_install`, `cli_help`, `create_service`,
   `generate_client`, `fleet` (`imq ctl`), `config` (`imq config`), `logs` (`imq log`)
@@ -20,7 +20,7 @@ Three capabilities, thirteen tools locally:
 
 The first two capabilities are read-only and run anywhere; the CLI bridge acts on the
 machine the server runs on, so the hosted endpoint carries the first two plus a
-`local_install_guide` and nothing else — six read-only tools.
+`local_install_guide` and nothing else — seven read-only tools.
 
 ## 2. Architecture
 
@@ -100,11 +100,32 @@ imqueue.org and imqueue.com; a commercial page with no mirror returns a pointer
 rather than an error. Bodies over 200 kB are truncated, which the result reports.
 
 ### `list_packages()`
-Static catalog of every **documented** package with one-liners, install commands and,
-where two packages cover the same ground, an explicit `pick` rule — so the agent
-picks the right one first instead of choosing on wording. `@imqueue/js`,
-`@imqueue/travis` and `@imqueue/mcp` are published but deliberately undocumented and
-are not listed.
+Catalog of every **documented** package with one-liners, install commands and, where
+two packages cover the same ground, an explicit `pick` rule — so the agent picks the
+right one first instead of choosing on wording. `@imqueue/js` and `@imqueue/travis`
+are published but deliberately undocumented and are not listed; `@imqueue/mcp` is
+this server, which is not a dependency a service takes, so it is absent here and
+present in `package_status`.
+
+Each entry also carries the package's current `version`, `license`, `node` floor and
+release date, read from `imqueue.org/status.json` at call time. When that feed is
+unreachable the catalogue is still returned — it is compiled in — with
+`factsUnavailable: true`, stated rather than silently omitted: an agent handed a list
+with no version field and no explanation reads it as "this package has no version".
+
+### `package_status(package?)`
+The current version, licence, `engines.node` floor and last release date of one
+published package or of all of them, plus the framework-wide licence, Node and Redis
+requirements. Every published package is covered, including `@imqueue/cli` and
+`@imqueue/mcp`.
+
+It exists because an agent with this server connected for an entire conversation
+still went to a search engine to ask what version and licence @imqueue was — and got
+1.x-era answers, because npmjs.com refuses automated fetches. The tool list is what
+an agent reads before deciding what to ask, and nothing in it said this server knew.
+Unlike `list_packages` there is no compiled-in fallback: if the feed is unreachable
+it says so, because a confidently stated stale version is the exact failure it exists
+to prevent.
 
 ### `scaffold_service(name, methods?)`
 Emit an `IMQService` subclass with `@expose()`d, **JSDoc-typed** methods (JSDoc is
@@ -142,7 +163,7 @@ The server runs locally, so when `@imqueue/cli` is on PATH it can drive the **re
 
 ## 3a. Tool annotations, and why each is set that way
 
-All four hints the spec defines are set explicitly on all thirteen tools — never
+All four hints the spec defines are set explicitly on all fourteen tools — never
 omitted, never null. `test/annotations.test.ts` asserts that through a real
 `tools/list` call and pins every value in the table below, so a change of judgement
 has to be made deliberately and shows up in a diff as a claim about behaviour.
@@ -161,7 +182,8 @@ Two things worth stating because they are easy to read as contradictions:
 |---|:--:|:--:|:--:|:--:|---|
 | `search_docs` | ✅ | ❌ | ✅ | ✅ | Fetches public pages from imqueue.org/imqueue.com and ranks them. Reads only; the sites change between calls, so open-world. |
 | `get_doc` | ✅ | ❌ | ✅ | ✅ | Fetches one page's markdown. Host-locked to the two @imqueue domains; refuses anything else. |
-| `list_packages` | ✅ | ❌ | ✅ | ❌ | Renders a catalogue compiled into the build. No network, no filesystem. |
+| `list_packages` | ✅ | ❌ | ✅ | ✅ | The catalogue is compiled in, but each entry's version and licence are read from imqueue.org/status.json at call time — a release between two identical calls changes the answer. Closed-world until 3.6.0, when the facts were added. |
+| `package_status` | ✅ | ❌ | ✅ | ✅ | Reads imqueue.org/status.json and nothing else. |
 | `scaffold_service` | ✅ | ❌ | ✅ | ❌ | **Returns source code as text.** Writes no file, creates no project, runs no command — the caller decides whether anything is ever written. `create_service` is the tool that writes. |
 | `scaffold_client` | ✅ | ❌ | ✅ | ❌ | **Returns text**, including the `imq client generate` command as a string. It does not run it. `generate_client` is the tool that does. |
 | `local_install_guide` | ✅ | ❌ | ✅ | ❌ | Returns static setup instructions. Installs nothing — which is why it is not called `install_locally`. |
@@ -174,7 +196,7 @@ Two things worth stating because they are easy to read as contradictions:
 | `config` | ❌ | ✅ | ❌ | ❌ | `imq config set` overwrites a value and `init` rewrites the file. Not idempotent because `init` is interactive and a repeat is not guaranteed to be a no-op. |
 | `logs` | ❌ | ✅ | ❌ | ❌ | `dump` reads; `clean` **deletes** the collected logs. Not idempotent: a running fleet writes logs continuously, so a second `clean` deletes *different* data — a client must not auto-retry it. |
 
-The hosted surface is the first eight rows minus the two `cli_*` entries — six tools,
+The hosted surface is the first nine rows minus the two `cli_*` entries — seven tools,
 every one `readOnlyHint: true` and `idempotentHint: true`. Nothing that changes state
 is registered there at all, because a server on Cloudflare's edge cannot reach the
 caller's machine; see §2 and `worker/README.md`.
@@ -192,19 +214,21 @@ Input:
 - `search_docs`: `{ query: string (1..200), limit?: 1..20, package?: string }`
 - `get_doc`: `{ url: string }`
 - `list_packages`: `{}`
+- `package_status`: `{ package?: string }` — with or without the `@imqueue/` scope; omit for every package
 - `scaffold_service` / `scaffold_client`: `{ name|service: string, methods?: Method[] }`
   where `Method = { name, description?, params?: {name,type,description?,optional?}[], returns? }`.
 
 Output: every tool returns `{ content: [{ type: "text", text }] }`, and errors return
 the same shape with `isError: true` (so the agent sees a message, not a transport
-failure). The five **shared** tools additionally declare an `outputSchema` and return
+failure). The six **shared** tools additionally declare an `outputSchema` and return
 `structuredContent`:
 
 | Tool | `structuredContent` |
 |---|---|
 | `search_docs` | `{ query, count, results[{title, section, description, url, symbol?}] }` |
 | `get_doc` | `{ url, markdown, mimeType, bytes, truncated, section?{heading, ancestors[], index, total}, fragmentMiss?{anchor, available[]} }` — the body is in **both** `markdown` and `content`, deliberately: the spec frames `content` as the backwards-compatible mirror of the structured result, so a client that renders `structuredContent` when present is entitled to ignore `content`, and a metadata-only schema handed it a citable URL with no page behind it. `section` and `fragmentMiss` mirror the header lines for the same reason — they are what stops a slice being mistaken for the whole page |
-| `list_packages` | `{ packages[{name, install, summary, pick?}] }` |
+| `list_packages` | `{ packages[{name, install, summary, version?, license?, node?, released?, deprecated?, pick?}], framework?{license, node, redis, commercial}, factsUnavailable? }` — the optional fields are absent together, and only when imqueue.org/status.json could not be read, which `factsUnavailable` states outright |
+| `package_status` | `{ framework{license, licenseNote, commercial, node, redis}, packages[{name, scoped, version, license, node, released, firstRelease, releases, majors[], deprecated, install, docs, npm, repo, summary}], generated, source }` |
 | `scaffold_service` | `{ service, install, files[{path, language, content}], types[], cliAlternative }` |
 | `scaffold_client` | `{ service, client, namespace, generateCommand, output, example{language, content} }` |
 
@@ -231,8 +255,8 @@ own voice.
 | **awesome-mcp-servers** (appcypher, wong2) | PR the repo into the list. | **absent** |
 | **Cline marketplace** | `llms-install.md` (this repo, current). | **absent**; optional, since it already works from a repo URL |
 | **Cursor / VS Code directories** | The GitHub/VS Code gallery pulls from the official registry. | expected to arrive on its own |
-| **Anthropic Connectors Directory** | No auth, six read-only tools with hints, privacy + terms + docs pages all 200. | technically ready; blocked on a non-technical prerequisite — the portal needs a Team/Enterprise org with directory-management access |
-| **OpenAI plugin directory** (the App directory, renamed July 2026 — one directory for ChatGPT *and* Codex) | Domain-verification token live at `/.well-known/openai-apps-challenge`; the listing wires the hosted endpoint. | **done** (verified 2026-08-21) — accepted and live at `chatgpt.com/plugins/plugin_asdk_app_6a6f945292888191a7d77db4893f8520`. It installs the hosted six, so a Codex user who wants the CLI bridge still needs the local server; both are documented on `/mcp/installation/#chatgpt-codex` |
+| **Anthropic Connectors Directory** | No auth, seven read-only tools with hints, privacy + terms + docs pages all 200. | technically ready; blocked on a non-technical prerequisite — the portal needs a Team/Enterprise org with directory-management access |
+| **OpenAI plugin directory** (the App directory, renamed July 2026 — one directory for ChatGPT *and* Codex) | Domain-verification token live at `/.well-known/openai-apps-challenge`; the listing wires the hosted endpoint. | **done** (verified 2026-08-21) — accepted and live at `chatgpt.com/plugins/plugin_asdk_app_6a6f945292888191a7d77db4893f8520`. It installs the hosted seven, so a Codex user who wants the CLI bridge still needs the local server; both are documented on `/mcp/installation/#chatgpt-codex` |
 | **imqueue.org** | "MCP server" section on `/using-ai-assistants/` with the install snippet. | **done** |
 
 Install snippet promoted everywhere:
@@ -258,7 +282,7 @@ do not declare an `outputSchema`) → `tools/call` for the offline tools, plus l
 ranking checks that only a real 1,500-entry corpus exercises.
 
 `npm run smoke:remote [url]` does the same for the hosted endpoint, where the
-contract is stricter: the exact six-tool list, `readOnlyHint: true` on all of them,
+contract is stricter: the exact seven-tool list, `readOnlyHint: true` on all of them,
 the search → get_doc chain on structured data alone, and the method handling
 (`GET`/`DELETE` → 405, `HEAD /` → 200) that a hang would otherwise reach production
 with.

@@ -8,7 +8,7 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server for **[@imque
 
 ## Tools
 
-Two surfaces, and they are not the same. The **local** server (`npx -y @imqueue/mcp`) has all 13 tools. The **hosted** server ([`mcp.imqueue.org/mcp`](#hosted-server-no-install)) has six, all read-only — see [below](#hosted-server-no-install) for why.
+Two surfaces, and they are not the same. The **local** server (`npx -y @imqueue/mcp`) has all 14 tools. The **hosted** server ([`mcp.imqueue.org/mcp`](#hosted-server-no-install)) has seven, all read-only — see [below](#hosted-server-no-install) for why.
 
 ### Hosted + local
 
@@ -16,11 +16,12 @@ Two surfaces, and they are not the same. The **local** server (`npx -y @imqueue/
 |---|---|
 | `search_docs` | Search the official docs (guides, tutorial, CLI manual, API reference, articles) and return the most relevant pages + URLs. |
 | `get_doc` | Fetch the full markdown of a doc page by URL. |
-| `list_packages` | List the main @imqueue packages with install commands. |
+| `list_packages` | List the documented @imqueue packages with install commands, current versions and licences. |
+| `package_status` | The current version, licence, minimum Node and last release date of any published @imqueue package, or all of them. |
 | `scaffold_service` | Generate an `IMQService` subclass with `@expose()`d, JSDoc-typed methods + a bootstrap (offline, no CLI needed). |
 | `scaffold_client` | Show how to generate and use the fully-typed client for a service (offline). |
 
-All five are read-only: they fetch or generate text and write nothing.
+All six are read-only: they fetch or generate text and write nothing.
 
 All five also declare an MCP **`outputSchema`** and return `structuredContent` alongside the human-readable markdown, so a client can consume results as data — take `results[0].url` from `search_docs` and hand it to `get_doc`, or write `scaffold_service`'s `files[]` straight to disk — instead of parsing prose and code fences. For the scaffolders and the catalogue the markdown is *rendered from* that same structure, so the two can't drift.
 
@@ -45,7 +46,9 @@ These drive the **real** CLI, so they act on the machine the server runs on. The
 
 Calls run with stdin closed and a timeout, so a missing-flag prompt fails fast instead of hanging. If `imq` isn't installed, run `cli_install` or use the offline `scaffold_*` tools.
 
-Docs are fetched live from imqueue.org's machine-readable feeds (`/llms.txt`, per-page `…/index.md` mirrors), so the server never ships stale content. It only ever fetches `imqueue.org`.
+Docs are fetched live from imqueue.org's machine-readable feeds, so the server never ships stale content: `/llms.txt` for the curated page index, per-page `…/index.md` mirrors for bodies, `/search-index.json`, `/search-text.json` and `/search-sections.json` for the search corpus, and `/status.json` for package versions and licences. `imqueue.com`'s `/llms.txt` and peer feeds are read too, for the commercial pages. Nothing outside those two hosts is ever fetched — the allowlist is enforced in `src/docs.ts` and refuses anything else.
+
+Versions and licences come from that last feed rather than being compiled in, deliberately: @imqueue releases far more often than this server does, so a baked-in version would be wrong within days and wrong with total confidence. npmjs.com serves bot detection to an unattended fetch, which is why imqueue.org reads the registry at build time and republishes the answer where anything can read it.
 
 ## Install
 
@@ -65,7 +68,7 @@ claude mcp add imqueue -- npx -y @imqueue/mcp
 
 @imqueue is listed in **[OpenAI's plugin directory](https://chatgpt.com/plugins/plugin_asdk_app_6a6f945292888191a7d77db4893f8520)** — shared by ChatGPT and Codex. In ChatGPT, open the **Plugins** tab and install it; in the Codex CLI, run `/plugins`. No config file, no Node.
 
-That route installs the **hosted** server, so it is the six read-only tools and none of the CLI bridge (see [below](#hosted-server-no-install)). Codex can run the local server alongside it — MCP servers live under `mcp_servers` in `~/.codex/config.toml`, in TOML rather than the usual JSON:
+That route installs the **hosted** server, so it is the seven read-only tools and none of the CLI bridge (see [below](#hosted-server-no-install)). Codex can run the local server alongside it — MCP servers live under `mcp_servers` in `~/.codex/config.toml`, in TOML rather than the usual JSON:
 
 ```toml
 [mcp_servers.imqueue]
@@ -100,7 +103,7 @@ If your client supports remote MCP servers and you only need docs and scaffoldin
 { "mcpServers": { "imqueue": { "url": "https://mcp.imqueue.org/mcp" } } }
 ```
 
-It serves six tools, **all read-only**: the five above plus `local_install_guide`, which returns the setup steps for the local install. This is also what [OpenAI's plugin directory](#chatgpt--codex) installs for ChatGPT and Codex — the same endpoint under the same limits, packaged as one click.
+It serves seven tools, **all read-only**: the six above plus `local_install_guide`, which returns the setup steps for the local install. This is also what [OpenAI's plugin directory](#chatgpt--codex) installs for ChatGPT and Codex — the same endpoint under the same limits, packaged as one click.
 
 **It does not offer the CLI-backed tools, by design.** Those act on *your* machine — your project files, your running services, your CLI config — which a server running on Cloudflare's edge cannot reach. Advertising them there would mean listing tools that can never do what their names say, so they are not registered at all in remote mode. If you need them, install locally.
 
@@ -128,7 +131,7 @@ node scripts/remote-smoke.mjs http://localhost:8787/mcp
 npm run smoke:remote                                 # or against production
 ```
 
-It asserts the **exact** six-tool list and that every one of them is read-only — the assertion that stops a future refactor from quietly re-exposing a CLI tool on the hosted endpoint.
+It asserts the **exact** seven-tool list and that every one of them is read-only — the assertion that stops a future refactor from quietly re-exposing a CLI tool on the hosted endpoint.
 
 ## Example
 

@@ -259,8 +259,8 @@ try {
 
   // EXACT list, not a superset. A superset assertion is what lets a local tool
   // leak back onto the hosted surface unnoticed.
-  const expected = ["get_doc", "list_packages", "local_install_guide", "scaffold_client", "scaffold_service", "search_docs"];
-  check("exactly the six hosted tools", JSON.stringify(names) === JSON.stringify(expected), names.join(", "));
+  const expected = ["get_doc", "list_packages", "local_install_guide", "package_status", "scaffold_client", "scaffold_service", "search_docs"];
+  check("exactly the seven hosted tools", JSON.stringify(names) === JSON.stringify(expected), names.join(", "));
 
   // The whole point of the hosted surface: nothing on it can change anything.
   const notReadOnly = tools.filter((t) => t.annotations?.readOnlyHint !== true).map((t) => t.name);

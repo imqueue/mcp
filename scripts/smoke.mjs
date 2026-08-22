@@ -54,7 +54,7 @@ try {
   const list = await rpc(2, "tools/list", {});
   const tools = list.result?.tools ?? [];
   const names = tools.map((t) => t.name).sort();
-  const expected = ["cli_help", "cli_install", "cli_status", "config", "create_service", "fleet", "generate_client", "get_doc", "list_packages", "logs", "scaffold_client", "scaffold_service", "search_docs"];
+  const expected = ["cli_help", "cli_install", "cli_status", "config", "create_service", "fleet", "generate_client", "get_doc", "list_packages", "logs", "package_status", "scaffold_client", "scaffold_service", "search_docs"];
   check("tools/list", JSON.stringify(names) === JSON.stringify(expected), names.join(", "));
 
   // local_install_guide exists only on the hosted server: locally the CLI tools it
@@ -96,10 +96,15 @@ try {
   const wrongDestructive = destructive.filter((n) => hint(n, "destructiveHint") !== true);
   check("destructive tools declare destructiveHint", wrongDestructive.length === 0, wrongDestructive.join(", "));
 
-  // The live-docs tools read a site that changes between calls; the scaffolders and
-  // the catalogue compute from the build and must not claim otherwise.
-  const openWorld = ["search_docs", "get_doc"];
-  const closedWorld = ["list_packages", "scaffold_service", "scaffold_client"];
+  // The tools that read a site which changes between calls; the scaffolders compute
+  // from the build and must not claim otherwise.
+  //
+  // list_packages moved from closed to open in 3.6.0: the catalogue is still
+  // compiled in, but each entry's version, licence and Node floor now come from
+  // imqueue.org/status.json at call time, and a release between two identical calls
+  // changes the answer. package_status reads that same feed and nothing else.
+  const openWorld = ["search_docs", "get_doc", "list_packages", "package_status"];
+  const closedWorld = ["scaffold_service", "scaffold_client"];
   const wrongOpen = [
     ...openWorld.filter((n) => hint(n, "openWorldHint") !== true),
     ...closedWorld.filter((n) => hint(n, "openWorldHint") !== false),
@@ -219,11 +224,60 @@ try {
   check("cli_status (graceful)", ct.includes("imq is available") || ct.includes("was not found"), ct.split("\n")[0]);
 
   // Network-dependent — treat failure as a warning, not a hard fail.
+  //
+  // EXCEPT a feed-version mismatch, which used to hide in here. Every live block
+  // swallows its failure into a ⚠️ and does NOT count it, so `assertFeedVersion`
+  // throwing — the one signal saying the pinned ranker no longer reads what the
+  // live site publishes — was reported as "no network" and this script exited 0.
+  // That is exactly the case it is the last line of defence for: smoke is excluded
+  // from CI on purpose (a blog post in another repo could turn that job red) and
+  // runs only as the publish and deploy gate, so nothing else is looking.
+  const versionMismatch = (t) => /feed v\d+ but this ranker reads|carries no feed version/.test(t);
+
   try {
     const search = await rpc(5, "tools/call", { name: "search_docs", arguments: { query: "delayed jobs", limit: 3 } });
     const t = search.result?.content?.[0]?.text ?? "";
-    console.log(`${t.includes("imqueue.org") ? "✅" : "⚠️ "} search_docs (live docs) ${t.includes("imqueue.org") ? "" : "— no network / docs unreachable"}`);
+
+    if (versionMismatch(t)) {
+      check("the pinned ranker reads the feeds the live site publishes", false, t.split("\n")[0]);
+    } else {
+      console.log(`${t.includes("imqueue.org") ? "✅" : "⚠️ "} search_docs (live docs) ${t.includes("imqueue.org") ? "" : "— no network / docs unreachable"}`);
+    }
   } catch { console.log("⚠️  search_docs skipped (no network)"); }
+
+  // The live status feed, which list_packages and package_status both read.
+  //
+  // Checked rather than warned once a record comes back: an unreachable site is a
+  // ⚠️, but a reachable one returning a record with no version means the feed
+  // changed shape under us — and a version field that quietly stops arriving is how
+  // an agent goes back to guessing, which is the whole reason this feed exists.
+  try {
+    const st = await rpc(11, "tools/call", { name: "package_status", arguments: { package: "core" } });
+    const sc = st.result?.structuredContent;
+    const core = sc?.packages?.[0];
+
+    if (!core) {
+      console.log("⚠️  package_status skipped (no network / status feed unreachable)");
+    } else {
+      check(
+        "package_status names a version, a licence and a Node floor",
+        /^\d+\.\d+\.\d+$/.test(core.version) && !!core.license && "node" in core,
+        `${core.scoped} ${core.version} ${core.license} node ${core.node ?? "unspecified"}`,
+      );
+      check("package_status reports the framework licence", !!sc.framework?.license, sc.framework?.license ?? "absent");
+
+      const lp = await rpc(12, "tools/call", { name: "list_packages", arguments: {} });
+      const listed = (lp.result?.structuredContent?.packages ?? []).find((p) => p.name === "@imqueue/core");
+
+      // The two tools read one feed, so a disagreement means one of them is serving
+      // a stale cache — which would be indistinguishable from a wrong answer.
+      check(
+        "list_packages and package_status agree on the version",
+        listed?.version === core.version,
+        `list_packages ${listed?.version ?? "absent"} vs package_status ${core.version}`,
+      );
+    }
+  } catch { console.log("⚠️  package_status skipped (no network)"); }
 
   // Symbol lookup needs /api/search-index.json, which only exists once the site
   // has deployed it — a miss is a warning, so this stays useful offline too.

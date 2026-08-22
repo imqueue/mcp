@@ -26,6 +26,8 @@
 // never become a tool failure, so everything runs inside ctx.waitUntil and every
 // error is swallowed.
 
+import { rankerIsStale } from "../src/ranker.js";
+
 /** The half-hour wall-clock bucket both sides use as a session. */
 const HALF_HOUR_MS = 1_800_000;
 
@@ -167,6 +169,19 @@ export function buildEvent(facts: CallFacts, userAgent: string, now: number, ver
           ...(facts.query === undefined ? {} : { query: facts.query }),
           ...(facts.results === undefined ? {} : { results: String(facts.results) }),
           server_version: version,
+          // Whether this deploy is ranking with an older engine than the one that
+          // built the feeds it just read.
+          //
+          // The only place a stale ranker is observable in PRODUCTION. Green CI on
+          // main says nothing here: a repin reaches the Worker through a publish and
+          // a deploy, and the gap between "imqueue.com shipped a new engine" and
+          // "this Worker was redeployed" is unbounded and, until now, invisible.
+          // src/ranker.ts warns to console.error as well, which nobody reads.
+          //
+          // Always emitted, never conditional, so the dimension is reportable as a
+          // rate — an absent param would make "false" and "an older build that did
+          // not send it" the same row.
+          ranker_stale: String(rankerIsStale()),
         },
       },
     ],

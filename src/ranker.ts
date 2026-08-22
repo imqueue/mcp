@@ -59,24 +59,72 @@ export { ranker };
 export const FEED_V: number = ranker.FEED_V;
 
 /**
+ * What this engine ANSWERS, as opposed to what it reads.
+ *
+ * FEED_V has been 1 through every ranking change ever made to the ranker, which is
+ * correct — no tuple moved — and is exactly why it cannot see the failure that
+ * actually happens here. This server pins the engine by commit and fetches the feeds
+ * live, so it can answer a query differently from imqueue.org's own search box with
+ * FEED_V agreeing throughout. The two pins sat a fortnight apart in August 2026 and
+ * nothing in either repo noticed.
+ */
+export const ENGINE_V: number | undefined = ranker.ENGINE_V;
+
+/** Set when a feed was built by an engine other than this one. Read by the worker's telemetry. */
+let stale = false;
+
+/** Has any feed reported an engine other than ours since this process started? */
+export function rankerIsStale(): boolean {
+  return stale;
+}
+
+/**
  * Fail a feed whose shape this ranker does not read.
  *
  * Throwing beats scoring: a wrong answer that looks right is the failure mode this
  * whole file exists to avoid, and `searchDocs` already has a path for "the feeds are
  * unusable" that degrades to the curated index.
  *
- * A feed with NO version is accepted, once: `v` was added to the feeds in the same
- * change that added it here, and refusing an unversioned feed would mean this server
- * could not read a site that had not deployed yet. That tolerance should be removed
- * when FEED_V next moves.
+ * A missing `v` is now a failure too. It used to be tolerated "once", for a site that
+ * had not deployed the versioned feeds yet — both editions deployed them in 2026 and
+ * the comment saying to remove the tolerance when FEED_V next moved was, predictably,
+ * enforced by nobody. An unversioned feed today means something served us a file that
+ * is not the feed we asked for.
  */
-export function assertFeedVersion(name: string, feed: { v?: number }): void {
-  if (feed.v !== undefined && feed.v !== FEED_V) {
+export function assertFeedVersion(name: string, feed: { v?: number; e?: number }): void {
+  if (feed.v === undefined) {
+    throw new Error(
+      `${name} carries no feed version. Every feed imqueue.org publishes has declared \`v\` `
+        + "since 2026; a file without one is not the feed this expects.",
+    );
+  }
+  if (feed.v !== FEED_V) {
     throw new Error(
       `${name} is feed v${feed.v} but this ranker reads v${FEED_V}. `
         + "The pinned ranker (vendor/search-ranker) is out of step with the live site — "
         + "update the submodule.",
     );
+  }
+
+  // The engine check WARNS. It must never throw, and the asymmetry is the point:
+  // a shape mismatch means the scores would be computed off the wrong field, while
+  // an engine mismatch means they are computed correctly by an engine that ranks
+  // slightly differently. Worse still, the site necessarily deploys before this
+  // server does — it is one `git push`, whereas this takes an npm publish and a
+  // Worker deploy — so throwing would turn every ranker release into an outage
+  // window on the hosted endpoint.
+  //
+  // `e` absent means the site has not deployed the stamp yet, which is a real state
+  // during exactly one deploy and is not worth a warning.
+  if (feed.e !== undefined && ENGINE_V !== undefined && feed.e !== ENGINE_V) {
+    if (!stale) {
+      console.error(
+        `[ranker] ${name} was built by engine v${feed.e}; this server runs v${ENGINE_V}. `
+          + "Results can differ from imqueue.org's own search for the same query. "
+          + "Repin vendor/search-ranker, publish, and redeploy the Worker.",
+      );
+    }
+    stale = true;
   }
 }
 

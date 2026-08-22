@@ -26,7 +26,7 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
 import { rankCorpus, type Corpus, type DocEntry } from "../src/docs.js";
-import { FEED_V, ranker } from "../src/ranker.js";
+import { FEED_V, ENGINE_V, assertFeedVersion, rankerIsStale, ranker } from "../src/ranker.js";
 
 /** A page record. */
 const page = (t: string, u: string, s = "", k = "Docs") => ({ g: 0 as const, t, u, s, k });
@@ -314,4 +314,58 @@ test("the ranker declares the feed version it reads", () => {
   // confidence rather than throwing.
   assert.equal(typeof FEED_V, "number");
   assert.ok(FEED_V >= 1);
+});
+
+test("a feed with no version is refused, not tolerated", () => {
+  // This used to be accepted "once", for a site that had not deployed the versioned
+  // feeds yet — with a comment saying to remove the tolerance when FEED_V next moved,
+  // which nothing enforced and nobody did. Both editions have published `v` since
+  // 2026; a feed without one today is not the feed this asked for.
+  assert.throws(() => assertFeedVersion("search-index.json", {}), /carries no feed version/);
+});
+
+test("a feed built by a different ENGINE warns but does not throw", () => {
+  // The asymmetry with FEED_V is the whole design. A shape mismatch means the scores
+  // are computed off the wrong field, so it throws. An engine mismatch means they are
+  // computed correctly by an engine that ranks a little differently — and imqueue.org
+  // NECESSARILY deploys before this server does, because that is one git push against
+  // an npm publish and a Worker deploy. Throwing would turn every ranker release into
+  // an outage window on the hosted endpoint.
+  assert.equal(rankerIsStale(), false);
+
+  const errors: string[] = [];
+  const original = console.error;
+
+  console.error = (...args: unknown[]) => { errors.push(args.join(" ")); };
+
+  try {
+    // Same shape, different engine: must return normally.
+    assertFeedVersion("search-index.json", { v: FEED_V, e: (ENGINE_V ?? 1) + 1 });
+  } finally {
+    console.error = original;
+  }
+
+  assert.equal(errors.length, 1, "the mismatch is reported exactly once, not per feed");
+  assert.match(errors[0], /was built by engine v/);
+  // The flag the Worker stamps onto every telemetry event — the only place a stale
+  // deploy is observable in production.
+  assert.equal(rankerIsStale(), true);
+});
+
+test("a feed with no engine stamp is not a mismatch", () => {
+  // True during exactly one deploy: the site publishing `e` for the first time, or an
+  // older edition that has not taken the change. Warning on it would cry wolf on a
+  // state that resolves itself.
+  const errors: string[] = [];
+  const original = console.error;
+
+  console.error = (...args: unknown[]) => { errors.push(args.join(" ")); };
+
+  try {
+    assertFeedVersion("search-index.json", { v: FEED_V });
+  } finally {
+    console.error = original;
+  }
+
+  assert.deepEqual(errors, []);
 });

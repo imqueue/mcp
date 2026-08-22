@@ -58,8 +58,12 @@ const EXPECTED: Record<string, [boolean, boolean, boolean, boolean]> = {
   // different question from whether the bytes are the same.
   search_docs: [true, false, true, true],
   get_doc: [true, false, true, true],
-  // Renders a catalogue compiled into the build: closed world.
-  list_packages: [true, false, true, false],
+  // Open-world since 3.6.0. The catalogue is still compiled in, but each entry's
+  // version, licence and Node floor are read from imqueue.org/status.json at call
+  // time — a release between two identical calls changes the answer.
+  list_packages: [true, false, true, true],
+  // Reads that same feed and nothing else.
+  package_status: [true, false, true, true],
   // Return generated source TEXT. The names say "scaffold", which in most tooling
   // means writing files — hence the descriptions now lead with READ-ONLY.
   scaffold_service: [true, false, true, false],
