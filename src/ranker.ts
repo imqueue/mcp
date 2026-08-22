@@ -1,12 +1,19 @@
 // The search ranker, and the one place this server touches it.
 //
 // It is not implemented here. It is github.com/imqueue/search-ranker, pinned as a
-// submodule and pinned to the same commit by the imqueue.com repo, so this server and
-// the website's own search box answer a query with the same code. Before the split
-// they did not: on 3,657 agent-shaped queries the website's ranker put a correct
-// result in the top 6 for 99.5% of them against this server's 83.9%, and no query at
-// all was answered by the old ranker and not the new one. The gap was invisible
-// because nothing compared them.
+// submodule and pinned by the imqueue.com repo too, so that this server and the
+// website's own search box answer a query with the same code. Before the split they
+// did not: on 3,657 agent-shaped queries the website's ranker put a correct result in
+// the top 6 for 99.5% of them against this server's 83.9%, and no query at all was
+// answered by the old ranker and not the new one. The gap was invisible because
+// nothing compared them.
+//
+// NOTHING COMPARES THE PINS EITHER. This said "pinned to the same commit" as though
+// it were checked; it is not, and the two drifted for a fortnight in August 2026
+// without a single check going red. The consequence was nil that time — the extra
+// commit was in search.js, which this server never copies — but the same silence
+// would cover a scoring change, which is precisely the failure the split was
+// supposed to end.
 //
 // THE IMPORT IS STATIC ON PURPOSE. A dynamic import would let a missing or
 // unbundleable ranker turn into a runtime failure inside a tool call — and

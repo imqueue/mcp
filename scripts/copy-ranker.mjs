@@ -1,10 +1,16 @@
 // Put the search ranker where both builds can import it.
 //
 // The ranker is github.com/imqueue/search-ranker, pinned as a submodule at
-// vendor/search-ranker and pinned identically by the imqueue.com repo. That is the
-// point: this server and the website answer the same query with the same code. It is
-// not on npm and it is not fetched at runtime — see SPEC.md and the plan for why
+// vendor/search-ranker and pinned by the imqueue.com repo too. The intent is that
+// this server and the website answer the same query with the same code. It is not
+// on npm and it is not fetched at runtime — see SPEC.md and the plan for why
 // fetching executable code from a website is the one thing this must never do.
+//
+// THE TWO PINS ARE NOT ENFORCED EQUAL, and this comment used to say they were. They
+// sat apart for a fortnight in August 2026 and nothing noticed, here or there,
+// because nothing compares them — it was harmless only by luck, the divergent commit
+// having touched search.js, the UI half this script does not copy. Read the claim
+// above as the goal, not as a guarantee.
 //
 // TWO PROBLEMS, ONE COPY.
 //
