@@ -11,6 +11,8 @@
 // guards against is a refactor months from now that registers a CLI tool in remote
 // mode again — the endpoint would still work, so only an assertion catches it, and
 // by then the listing says something false about what the server can do.
+import { QUESTION, assertHandshake, assertGetDocSchema, assertQuestionRanking } from "./lib/contract.mjs";
+
 const target = process.argv[2] ?? "https://mcp.imqueue.org/mcp";
 /**
  * Optional expected server version, passed by deploy-worker.mjs.
@@ -223,7 +225,7 @@ try {
     capabilities: {},
     clientInfo: { name: "remote-smoke", version: "0" },
   });
-  check("initialize", init?.serverInfo?.name === "imqueue", `${init?.serverInfo?.name} ${init?.serverInfo?.version ?? ""}`);
+  assertHandshake(init, check);
 
   // Before anything else is judged, establish WHICH build answered. Every assertion
   // below is about the contract of a specific version, so if this is the wrong one
@@ -242,17 +244,14 @@ try {
     );
   }
 
-  // The only server-controlled text that reaches the host model's SYSTEM PROMPT.
-  // It shipped absent for three releases and nothing noticed, because a server
-  // with no instructions works perfectly — it just loses the argument with the
-  // model's @imqueue priors. Assert presence AND the rules, so a rewrite that
-  // turns it into a description of the server fails here.
+  // Presence and the display title are asserted in scripts/lib/contract.mjs,
+  // against both targets. The RULES are hosted-only: a rewrite that turned the
+  // instructions into a description of the server would strand the directory
+  // listings this endpoint is submitted to.
   const instructions = init?.instructions ?? "";
-  check("initialize returns instructions", instructions.length > 0, `${instructions.length} chars`);
   const missingRules = ["search_docs", "list_packages", "@expose()", "@classType()", "imq client generate"]
     .filter((r) => !instructions.includes(r));
   check("instructions carry the operating rules", missingRules.length === 0, missingRules.join(", "));
-  check("serverInfo carries a display title", init?.serverInfo?.title === "@imqueue", init?.serverInfo?.title ?? "absent");
 
   const tools = (await rpc("tools/list"))?.tools ?? [];
   const names = tools.map((t) => t.name).sort();
@@ -300,15 +299,7 @@ try {
   const noSchema = tools.filter((t) => !t.outputSchema).map((t) => t.name);
   check("every hosted tool declares an outputSchema", noSchema.length === 0, noSchema.join(", "));
 
-  // get_doc's schema must carry the page body here too — the hosted server shares
-  // src/server.ts, so a metadata-only schema would strand every structuredContent-first
-  // client on the endpoint that exists precisely for zero-install clients.
-  const docProps = Object.keys(tools.find((t) => t.name === "get_doc")?.outputSchema?.properties ?? {});
-  check(
-    "get_doc schema carries the page body, not just metadata",
-    docProps.includes("markdown"),
-    docProps.join(", "),
-  );
+  assertGetDocSchema(tools, check);
 
   // A tool that cannot run has no business being listed — call each one and
   // require a usable answer, which is also what both directories test.
@@ -381,20 +372,10 @@ try {
   // listed contract, not a nicety.
   const asked = await rpc("tools/call", {
     name: "search_docs",
-    arguments: { query: "How do I expose a method on an @imqueue service?", limit: 5 },
+    arguments: { query: QUESTION, limit: 5 },
   });
   const ranked = asked?.structuredContent?.results ?? [];
-  // /api/faq/ accepted for the same reason as in scripts/smoke.mjs, where the full note lives:
-  // imqueue.org's FAQ page answers this exact question under a heading of its own and took first
-  // place from rpc.expose/ on 2026-08-06. Kept in step with smoke.mjs deliberately — the two
-  // assert the same property against the local and the hosted server, so fixing one and not the
-  // other reads as "the deployment ranks differently from the build", the most misleading result
-  // this script can give.
-  check(
-    "a question ranks the page that answers it first",
-    /\/api\/rpc\/latest\/rpc\.expose\/|\/tutorial\/|\/api\/faq\//.test(ranked[0]?.url ?? ""),
-    ranked[0]?.url ?? "no results",
-  );
+  assertQuestionRanking(ranked, check);
 
   // Invalid input must produce an actionable message rather than a bare stack or a
   // generic failure — a reviewer checks this explicitly.

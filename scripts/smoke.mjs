@@ -5,6 +5,7 @@
 // This covers the LOCAL surface only. The hosted one is a different tool list and
 // has its own check — scripts/remote-smoke.mjs.
 import { spawn } from "node:child_process";
+import { QUESTION, assertHandshake, assertGetDocSchema, assertQuestionRanking } from "./lib/contract.mjs";
 
 const proc = spawn("node", ["dist/index.js"], { stdio: ["pipe", "pipe", "inherit"] });
 
@@ -41,13 +42,7 @@ try {
     capabilities: {},
     clientInfo: { name: "smoke", version: "0" },
   });
-  check("initialize", init.result?.serverInfo?.name === "imqueue", init.result?.serverInfo?.name);
-
-  // Instructions reach the host model's system prompt, and a server without them
-  // still works — which is why their absence went unnoticed for three releases.
-  const instructions = init.result?.instructions ?? "";
-  check("initialize returns instructions", instructions.length > 0, `${instructions.length} chars`);
-  check("serverInfo carries a display title", init.result?.serverInfo?.title === "@imqueue", init.result?.serverInfo?.title ?? "absent");
+  assertHandshake(init.result, check);
 
   send({ jsonrpc: "2.0", method: "notifications/initialized" });
 
@@ -118,16 +113,7 @@ try {
   const missingSchema = WITH_SCHEMA.filter((n) => !tools.find((t) => t.name === n)?.outputSchema);
   check("shared tools declare an outputSchema", missingSchema.length === 0, missingSchema.join(", "));
 
-  // get_doc's schema MUST carry the page body. Without it, a client that renders
-  // structuredContent when present — which the spec entitles it to do, `content`
-  // being framed as the backwards-compatible mirror — gets a URL and a byte count
-  // and no page, and cannot tell that it read nothing.
-  const docSchemaProps = Object.keys(tools.find((t) => t.name === "get_doc")?.outputSchema?.properties ?? {});
-  check(
-    "get_doc schema carries the page body, not just metadata",
-    docSchemaProps.includes("markdown") && docSchemaProps.includes("url"),
-    docSchemaProps.join(", "),
-  );
+  assertGetDocSchema(tools, check);
 
   const CLI_TOOLS = ["cli_status", "cli_help", "cli_install", "create_service", "generate_client", "fleet", "config", "logs"];
   const unexpectedSchema = CLI_TOOLS.filter((n) => tools.find((t) => t.name === n)?.outputSchema);
@@ -288,33 +274,16 @@ try {
     console.log(`${hit ? "✅" : "⚠️ "} search_docs (API symbols)${hit ? "" : " — /api/search-index.json not reachable"}`);
   } catch { console.log("⚠️  search_docs (API symbols) skipped (no network)"); }
 
-  // Ranking, for a natural-language question — the shape a chat user actually
-  // types. Catches term weighting that pays `imqueue` and `service` (in nearly
-  // every title, so worth nothing) the same as `expose`.
+  // Ranking for a natural-language question. The assertion itself is in
+  // scripts/lib/contract.mjs, asserted identically against the hosted server.
   try {
-    const q = "How do I expose a method on an @imqueue service?";
-    const nl = await rpc(9, "tools/call", { name: "search_docs", arguments: { query: q, limit: 5 } });
+    const nl = await rpc(9, "tools/call", { name: "search_docs", arguments: { query: QUESTION, limit: 5 } });
     const results = nl.result?.structuredContent?.results ?? [];
 
     if (!results.length) {
       console.log("⚠️  search_docs (question ranking) skipped (no network)");
     } else {
-      // /api/faq/ accepted since 2026-08-06, when imqueue.org grew a page whose headings ARE
-      // these questions — this one is answered by
-      // /api/faq/#how-do-i-expose-a-service-method-so-it-can-be-called-remotely, verbatim. It
-      // took first place from rpc.expose/ and that is the page doing its job, not a regression.
-      //
-      // NOT to be copied into imqueue.com's intent KPI set, which deliberately refuses
-      // /api/faq/ (see the `rules` note in scripts/search-kpi/data/intent-queries.json). That
-      // set exists to measure whether the REFERENCE page is reachable, and accepting the FAQ
-      // would score near 100% while hiding exactly what it was built to see. The difference is
-      // what each measures: the intent set asks "can an agent reach the signature", this asks
-      // "does a chat client get a usable first answer". Both are true, and neither generalises.
-      check(
-        "a question ranks the page that answers it first",
-        /\/api\/rpc\/latest\/rpc\.expose\/|\/tutorial\/|\/api\/faq\//.test(results[0].url),
-        results[0].url,
-      );
+      assertQuestionRanking(results, check);
     }
   } catch { console.log("⚠️  search_docs (question ranking) skipped (no network)"); }
 
