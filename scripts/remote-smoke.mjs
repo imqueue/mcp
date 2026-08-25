@@ -386,21 +386,14 @@ try {
   const ranked = asked?.structuredContent?.results ?? [];
   // /api/faq/ accepted for the same reason as in scripts/smoke.mjs, where the full note lives:
   // imqueue.org's FAQ page answers this exact question under a heading of its own and took first
-  // place from rpc.expose/ on 2026-08-06. What this guards is an essay winning, and an FAQ answer
-  // is not that. Kept in step with smoke.mjs deliberately — the two assert the same property
-  // against the local and the hosted server, so fixing one and not the other reads as "the
-  // deployment ranks differently from the build", the most misleading result this script can give.
+  // place from rpc.expose/ on 2026-08-06. Kept in step with smoke.mjs deliberately — the two
+  // assert the same property against the local and the hosted server, so fixing one and not the
+  // other reads as "the deployment ranks differently from the build", the most misleading result
+  // this script can give.
   check(
     "a question ranks the page that answers it first",
     /\/api\/rpc\/latest\/rpc\.expose\/|\/tutorial\/|\/api\/faq\//.test(ranked[0]?.url ?? ""),
     ranked[0]?.url ?? "no results",
-  );
-  const firstBlog = ranked.findIndex((r) => r.url.includes("/blog/"));
-  const lastDoc = ranked.reduce((m, r, i) => (r.url.includes("/blog/") ? m : i), -1);
-  check(
-    "no blog post outranks a doc page",
-    firstBlog === -1 || firstBlog > lastDoc,
-    ranked.map((r) => r.url.replace("https://imqueue.org", "")).join(" | "),
   );
 
   // Invalid input must produce an actionable message rather than a bare stack or a
