@@ -7,7 +7,7 @@
 // is a publish gate that should not need GitHub to be up. It runs in checks.yml.
 //
 // WHAT IT IS FOR. The ranker is a submodule, and two repos pin it: imqueue.com
-// takes ranker.js and search.js, this server takes ranker.js alone. Because they
+// takes both the engine and the UI bundle, this server takes the engine alone. Because they
 // pin by COMMIT and consume different halves, the pins fall out of step on a commit
 // to either half — in August 2026 they sat a fortnight apart with nothing red in
 // either repo. That one was harmless, the divergent commit being search.js, and
@@ -30,14 +30,19 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const RAW = "https://raw.githubusercontent.com/imqueue/search-ranker/master/ranker.js";
+// THE SOURCE, on both sides. The ranker was rewritten in TypeScript and no longer
+// commits its bundles, so master has no ranker.js to fetch — and the local side reads
+// the same file rather than the built one, which keeps the two comparable by
+// construction and keeps this check runnable on a checkout that has not been built.
+const DECLARED_IN = "src/ranker/constants.ts";
+const RAW = `https://raw.githubusercontent.com/imqueue/search-ranker/master/${DECLARED_IN}`;
 const TIMEOUT_MS = 15000;
 
 // Read as TEXT on both sides. The vendored copy could be require()d, but reading
 // both the same way means one regex to be wrong in rather than two paths that can
-// disagree — and fetching 2,900 lines of JavaScript to execute them for a version
+// disagree — and fetching a module from the network to execute it for a version
 // number would be a genuinely bad trade.
-const DECLARATION = /^\s*var\s+ENGINE_V\s*=\s*(\d+)\s*;/m;
+const DECLARATION = /^\s*export\s+const\s+ENGINE_V\s*=\s*(\d+)\s*;/m;
 
 function declaredIn(source, where) {
   const m = DECLARATION.exec(source);
@@ -48,11 +53,23 @@ function declaredIn(source, where) {
 }
 
 const vendored = declaredIn(
-  readFileSync(join(ROOT, "vendor", "search-ranker", "ranker.js"), "utf8"),
-  "vendor/search-ranker/ranker.js",
+  readFileSync(join(ROOT, "vendor", "search-ranker", DECLARED_IN), "utf8"),
+  `vendor/search-ranker/${DECLARED_IN}`,
 );
 
 const res = await fetch(RAW, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+
+if (res.status === 404) {
+  // A 404 IS NOT AN OUTAGE. GitHub being down answers 5xx; a 404 means the file is not
+  // where this repo believes it is, and lumping the two together is how this check would
+  // go quietly green forever the day the constant moves.
+  console.error(`  FAIL  ${RAW} is 404.`);
+  console.error("");
+  console.error("        Either the TypeScript rewrite has not landed on search-ranker@master");
+  console.error("        yet — this repo already reads the rewritten layout, and master still");
+  console.error(`        holds the single ranker.js — or ENGINE_V moved out of ${DECLARED_IN}.`);
+  process.exit(1);
+}
 
 if (!res.ok) {
   // A GitHub outage is not a drift. Failing on one teaches everyone to re-run the

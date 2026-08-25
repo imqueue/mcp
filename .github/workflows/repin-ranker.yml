@@ -4,8 +4,8 @@ name: Repin the search ranker
 # changed.
 #
 # Why it exists. The ranker is github.com/imqueue/search-ranker, pinned here and
-# pinned separately by imqueue.com — which takes ranker.js and search.js, while this
-# server takes ranker.js alone. Because the two consume different halves and pin by
+# pinned separately by imqueue.com — which takes both the engine and the UI bundle, while
+# this server takes the engine alone. Because the two consume different halves and pin by
 # COMMIT, the pins fall out of step on a commit to either half. In August 2026 they
 # sat a fortnight apart with nothing red in either repo, and it was harmless purely
 # by luck: the divergent commit was in search.js, which this server never copies.
@@ -65,8 +65,15 @@ jobs:
         run: |
           set -euo pipefail
 
+          # From the SOURCE, and from both layouts. The ranker's TypeScript rewrite moved
+          # ENGINE_V out of a committed ranker.js and into src/ranker/constants.ts, and this
+          # job is precisely the thing that moves a pin ACROSS that boundary — once, with a
+          # `before` in the old layout and an `after` in the new one.
           engine_v() {
-            sed -n 's/^[[:space:]]*var ENGINE_V = \([0-9][0-9]*\);.*/\1/p' vendor/search-ranker/ranker.js | head -1
+            sed -n 's/^[[:space:]]*export const ENGINE_V = \([0-9][0-9]*\);.*/\1/p' \
+              vendor/search-ranker/src/ranker/constants.ts 2>/dev/null | head -1
+            sed -n 's/^[[:space:]]*var ENGINE_V = \([0-9][0-9]*\);.*/\1/p' \
+              vendor/search-ranker/ranker.js 2>/dev/null | head -1
           }
 
           before_sha="$(git -C vendor/search-ranker rev-parse HEAD)"

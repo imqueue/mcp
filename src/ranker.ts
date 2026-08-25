@@ -30,13 +30,17 @@ import ranker from "./search-ranker.cjs";
 /**
  * Slot 3 of a section tuple: the section's plain text.
  *
- * A magic number, and it stays one deliberately rather than being imported: the
- * ranker does not export its tuple offsets (they are internals of a file whose other
- * consumer is a browser). What makes it safe is that slots 0–4 come from the FEED, so
- * this offset is part of the shape `FEED_V` versions — move it and
- * `assertFeedVersion` below is what shouts, in the same change.
+ * TAKEN FROM THE RANKER, not restated. This was a hand-written `3` with a comment saying
+ * the ranker did not export its tuple offsets; the TypeScript rewrite exports them, so the
+ * comment stopped being true and the number stopped being necessary in the same commit.
+ *
+ * The old note said the `3` was safe because slots 0–4 come from the FEED, so
+ * `assertFeedVersion` below would shout if the offset moved. That is still true and it is
+ * still the second line of defence — but a second copy of a constant is exactly the kind of
+ * thing that agrees with its source right up until it does not, and this repo already has
+ * one story about a value drifting between here and imqueue.com.
  */
-const S_TEXT = 3;
+const S_TEXT = ranker.S_TEXT;
 
 // Derived from the ranker's own signatures rather than restated, so a declaration
 // that changes cannot leave a second, stale copy of the same shape behind here.

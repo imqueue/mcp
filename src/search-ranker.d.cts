@@ -1,10 +1,22 @@
 // Types for the vendored search ranker (github.com/imqueue/search-ranker).
 //
-// HAND-WRITTEN, and it has to be: the ranker is plain ES5-compatible JavaScript with
-// no build step, because it is served straight to browsers and also runs in a
-// Cloudflare Worker where `eval` is forbidden. `allowJs` is off in this repo, so
-// there is nothing to infer from — this file is the contract, and it is only as true
-// as whoever last edited the ranker made it.
+// STILL HAND-WRITTEN, and that is now a choice rather than a necessity. The ranker was
+// rewritten in TypeScript and ships real declarations at dist/types/ranker/, generated from
+// the same source that produces the bundle this file describes — strictly better types than
+// these, and richer.
+//
+// They are not used, for two reasons that are about THIS package rather than about them.
+// dist/ is build output and is gitignored in the submodule, so a checkout has no declarations
+// until it has been built — and `tsc` here maps only src/ into dist/, so adopting them would
+// mean copying a fourteen-file generated tree into a published package's source and keeping
+// the published `files: ["dist"]` story straight. That is a build change, not a typing one.
+//
+// What the rewrite DID buy is upstream enforcement: the site's UI half now imports its types
+// from the engine's own source, so a name that stops being exported fails to compile in that
+// repo. This file is a second, coarser copy of a contract that is now checked at its origin.
+//
+// `allowJs` is off in this repo, so there is nothing to infer from the copied .cjs — this
+// file is the contract, and it is only as true as whoever last edited the ranker made it.
 //
 // Two things keep it honest rather than aspirational:
 //   * scripts/copy-ranker.mjs refuses a ranker that no longer exports itself under
@@ -114,6 +126,14 @@ declare const ranker: {
   /** "answers" | "api" | "docs" — the group a hit renders under. */
   groupKey(hit: RankerHit): string;
   state: RankerState;
+  /**
+   * Slot 3 of a section tuple: the section's plain text.
+   *
+   * Declared since the rewrite exported it — src/ranker.ts used to hard-code the 3. Required,
+   * not optional: a pin old enough to lack it is old enough to predate the rewrite, and
+   * scripts/copy-ranker.mjs refuses that pin by name before this declaration is ever consulted.
+   */
+  S_TEXT: number;
   /** The feed shape this ranker reads. Asserted against the feeds it is given. */
   FEED_V: number;
   /**
@@ -121,7 +141,7 @@ declare const ranker: {
    *
    * Optional because a pin predating its introduction has no such export, and the
    * comparison degrades to "cannot tell" rather than to a crash. Everything else in
-   * this file is required, and imqueue.com's check-search-ranker.js asserts the
+   * this file is required, and imqueue.com's check-search-ranker.ts asserts the
    * required list against the engine's real exports — TypeScript cannot catch a lie
    * in a hand-written .d.cts.
    */
