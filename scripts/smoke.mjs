@@ -289,12 +289,8 @@ try {
   } catch { console.log("⚠️  search_docs (API symbols) skipped (no network)"); }
 
   // Ranking, for a natural-language question — the shape a chat user actually
-  // types. The failure this still catches is term weighting that pays `imqueue`
-  // and `service` (in nearly every title, so worth nothing) the same as `expose`.
-  //
-  // It used to assert a second thing — that no blog post outranks a doc page —
-  // and no longer does; see the note below for what was measured and what would
-  // bring it back.
+  // types. Catches term weighting that pays `imqueue` and `service` (in nearly
+  // every title, so worth nothing) the same as `expose`.
   try {
     const q = "How do I expose a method on an @imqueue service?";
     const nl = await rpc(9, "tools/call", { name: "search_docs", arguments: { query: q, limit: 5 } });
@@ -306,9 +302,7 @@ try {
       // /api/faq/ accepted since 2026-08-06, when imqueue.org grew a page whose headings ARE
       // these questions — this one is answered by
       // /api/faq/#how-do-i-expose-a-service-method-so-it-can-be-called-remotely, verbatim. It
-      // took first place from rpc.expose/ and that is the page doing its job, not a regression:
-      // what this check guards, per the note above, is comparison essays and long blog posts
-      // winning. An FAQ answer is the opposite of that failure.
+      // took first place from rpc.expose/ and that is the page doing its job, not a regression.
       //
       // NOT to be copied into imqueue.com's intent KPI set, which deliberately refuses
       // /api/faq/ (see the `rules` note in scripts/search-kpi/data/intent-queries.json). That
@@ -321,38 +315,6 @@ try {
         /\/api\/rpc\/latest\/rpc\.expose\/|\/tutorial\/|\/api\/faq\//.test(results[0].url),
         results[0].url,
       );
-      // REMOVED 2026-08-25: "no blog post outranks a doc page".
-      //
-      // It asserted that no /blog/ URL appears above any non-blog URL in the top 5.
-      // It was correct on its own terms and it was failing on this very query:
-      //
-      //   4. /blog/runtime-validation-typescript-services/#do-i-need-to-validate-…
-      //      score 362, covers 2 of the 4 content terms
-      //   5. /mcp/tools/#search-docs
-      //      score 335, covers 4 of 4
-      //
-      // The cause is a real asymmetry in the shared ranker, diagnosed rather than
-      // guessed: blogTrust()/EDITORIAL are applied in finishSection, so a blog
-      // SECTION is discounted on a question (0.6) and a blog ANSWER RECORD — the
-      // g=2 records the corpus builder lifts out of question-shaped headings — is
-      // not discounted at all. Answer records also carry the page TITLE in `k`,
-      // never its kind, so the ranker cannot tell a blog answer from a docs answer
-      // even if it wanted to. Both paths do have the same coverage floor, so that
-      // is not the difference.
-      //
-      // Applying blogTrust to editorial answer records fixes this assertion and
-      // costs the gold set macro P@1 -1.8, micro -2.4, 2 gained / 26 lost,
-      // chi2 18.9, p < 0.0001. Measured, then reverted: it trades 26 real losses
-      // for one assertion.
-      //
-      // So the check is gone rather than weakened, and this note is what replaces
-      // it. What it guarded is genuine — a client served comparison essays instead
-      // of documentation falls back to a web search — and the top three here are
-      // still all docs, which is the part that decides that outcome. Reinstate it
-      // (or a top-3 form of it) once there is a query set that can score
-      // chat-shaped questions; that set is the missing prerequisite recorded in
-      // MCP-SEARCH-DOCS-PLAN.md, and without it any remedy is tuned against this
-      // single query.
     }
   } catch { console.log("⚠️  search_docs (question ranking) skipped (no network)"); }
 
