@@ -74,11 +74,19 @@ jobs:
           # ENGINE_V out of a committed ranker.js and into src/ranker/constants.ts, and this
           # job is precisely the thing that moves a pin ACROSS that boundary — once, with a
           # `before` in the old layout and an `after` in the new one.
+          # Each probe is `|| true` and the PAIR is piped through one `head -1`. Both
+          # matter under `set -euo pipefail`: sed exits 2 on a file that is not there,
+          # which is the normal case for whichever layout is absent, and pipefail
+          # promotes that to the pipeline's status — so the unguarded form aborted the
+          # step the moment the rewrite removed ranker.js, which is exactly the crossing
+          # this function exists to survive. One shared `head -1` also keeps the result a
+          # single line if a commit ever carries both layouts at once.
           engine_v() {
-            sed -n 's/^[[:space:]]*export const ENGINE_V = \([0-9][0-9]*\);.*/\1/p' \
-              vendor/search-ranker/src/ranker/constants.ts 2>/dev/null | head -1
-            sed -n 's/^[[:space:]]*var ENGINE_V = \([0-9][0-9]*\);.*/\1/p' \
-              vendor/search-ranker/ranker.js 2>/dev/null | head -1
+            { sed -n 's/^[[:space:]]*export const ENGINE_V = \([0-9][0-9]*\);.*/\1/p' \
+                vendor/search-ranker/src/ranker/constants.ts 2>/dev/null || true
+              sed -n 's/^[[:space:]]*var ENGINE_V = \([0-9][0-9]*\);.*/\1/p' \
+                vendor/search-ranker/ranker.js 2>/dev/null || true
+            } | head -1
           }
 
           before_sha="$(git -C vendor/search-ranker rev-parse HEAD)"
@@ -89,13 +97,36 @@ jobs:
           after_sha="$(git -C vendor/search-ranker rev-parse HEAD)"
           after_v="$(engine_v)"
 
+          # "Could not read it" is not "it did not change". An empty probe on either
+          # side means the pin has crossed into a layout this job cannot read, and
+          # whether the engine now answers differently is UNKNOWN — so it reports as
+          # moved, which is the branch that opens the issue and asks a human. Calling
+          # it unchanged would put "answers every query exactly as before" into a
+          # commit message on the strength of having read nothing, and would do it
+          # silently, since the no-op path deliberately opens no issue.
+          if [ -z "$before_v" ] || [ -z "$after_v" ]; then
+            engine_moved=true
+            engine_unknown=true
+          elif [ "$before_v" != "$after_v" ]; then
+            engine_moved=true
+            engine_unknown=false
+          else
+            engine_moved=false
+            engine_unknown=false
+          fi
+
           {
             echo "before_sha=$before_sha"
             echo "after_sha=$after_sha"
             echo "before_v=$before_v"
             echo "after_v=$after_v"
             echo "moved=$([ "$before_sha" != "$after_sha" ] && echo true || echo false)"
-            echo "engine_moved=$([ "$before_v" != "$after_v" ] && echo true || echo false)"
+            echo "engine_moved=$engine_moved"
+            echo "engine_unknown=$engine_unknown"
+            # display forms, so a side that could not be read renders as v? rather
+            # than a bare v in the issue body
+            echo "before_vd=${before_v:-?}"
+            echo "after_vd=${after_v:-?}"
           } >> "$GITHUB_OUTPUT"
 
           echo "pin     $before_sha -> $after_sha"
@@ -125,7 +156,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ "${{ steps.pin.outputs.engine_moved }}" = "true" ]; then
+          if [ "${{ steps.pin.outputs.engine_unknown }}" = "true" ]; then
+            note="ENGINE_V could not be read on one or both sides of this move (before
+          v${{ steps.pin.outputs.before_v }}, after v${{ steps.pin.outputs.after_v }}), so whether this engine ANSWERS queries
+          differently is UNKNOWN: the ranker has moved to a layout engine_v() in
+          .github/workflows/repin-ranker.yml does not know how to read. Treated as a
+          change rather than assumed harmless — the tracking issue asks for a decision,
+          and the probe needs teaching the new layout before this job can tell a UI-only
+          commit from an engine one again."
+          elif [ "${{ steps.pin.outputs.engine_moved }}" = "true" ]; then
             note="ENGINE_V moved v${{ steps.pin.outputs.before_v }} -> v${{ steps.pin.outputs.after_v }}: this engine ANSWERS
           queries differently. The deployed server does NOT have it — a repin reaches
           production only through npm publish and wrangler deploy — so search_docs keeps
@@ -164,6 +203,10 @@ jobs:
             body=$(printf 'search-ranker moved to `%s` and the build failed against it, so the pin was NOT taken.\n\n```\n%s\n```\n' \
               "${{ steps.pin.outputs.after_sha }}" "$(tail -25 /tmp/verify.log 2>/dev/null || echo '(not run)')")
             title="search-ranker: the new pin does not build"
+          elif [ "${{ steps.pin.outputs.engine_unknown }}" = "true" ]; then
+            body=$(printf 'search-ranker moved to `%s` and the pin has been taken — but ENGINE_V could not be read on one or both sides of the move (before `v%s`, after `v%s`).\n\n**Whether ranking changed is unknown.** The ranker has moved to a layout `engine_v()` in `.github/workflows/repin-ranker.yml` does not know how to read, and telling a UI-only commit from an engine change is the entire decision this job exists to make. It is reported as a change because unknown is not the same as unchanged.\n\n1. Teach `engine_v()` where ENGINE_V now lives.\n2. Decide by hand whether this pin needs a release — if it does, the recipe is the same:\n\n```\nnpm run verify\nnpm version minor && git push --follow-tags && npm publish\n```\n' \
+              "${{ steps.pin.outputs.after_sha }}" "${{ steps.pin.outputs.before_vd }}" "${{ steps.pin.outputs.after_vd }}")
+            title="search-ranker: ENGINE_V could not be read from the new pin"
           else
             body=$(printf 'search-ranker moved to engine **v%s** (from v%s) and the pin has been taken on main in `%s`.\n\n**The deployed server does not have it yet.** A repin only reaches production through a publish, so until then:\n\n- `search_docs` on https://mcp.imqueue.org/mcp ranks with engine v%s\n- imqueue.org builds its feeds with whatever it has pinned\n- the runtime check in `src/ranker.ts` logs `[ranker] … was built by engine v…` on every mismatched feed, and the Worker stamps `ranker_stale` on its telemetry\n\nTo close the gap:\n\n```\nnpm run verify\nnpm version minor && git push --follow-tags && npm publish\n```\n\nimqueue.com owns the measurement — read its paired KPI result before treating a ranking change as an improvement.\n' \
               "${{ steps.pin.outputs.after_v }}" "${{ steps.pin.outputs.before_v }}" "${{ steps.commit.outputs.sha }}" "${{ steps.pin.outputs.before_v }}")
