@@ -21,28 +21,8 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-
-import { createServer, type CliHandlers } from "../src/server.js";
 import { DIALECT, toCurrentDialect } from "../src/schema-dialect.js";
-
-/** Stub handlers, so local mode registers the CLI tools without an `imq` binary. */
-const stubCli = new Proxy({}, { get: () => async () => "" }) as CliHandlers;
-
-async function listTools(mode: "local" | "remote") {
-  const server = createServer({ version: "0.0.0-test", mode, cli: mode === "local" ? stubCli : undefined });
-  const client = new Client({ name: "schema-dialect-test", version: "0" });
-  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
-
-  await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
-
-  const { tools } = await client.listTools();
-
-  await client.close();
-
-  return tools;
-}
+import { listTools } from "./lib/list-tools.js";
 
 /** Every `$schema` in the tree, with the root's first. */
 function dialects(schema: unknown): { root: unknown; nested: unknown[] } {

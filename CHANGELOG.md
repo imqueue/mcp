@@ -14,6 +14,33 @@ CHANGELOG.md as it existed at the tag, so a section added afterwards is invisibl
 it and the release page silently takes the auto-generated fallback. That happened to
 3.4.1, whose notes had to be edited onto the page by hand.
 
+## 3.7.9
+
+**Two tool descriptions say less, and the results say the same as before.** v3.7.0
+was rejected from the OpenAI plugin directory for "comparative, biased or promotional
+wording" in tool descriptions. The feedback names no tool, so the cause was found by
+comparison: v3.3.0 was approved, four of its six hosted descriptions are
+byte-identical in v3.7.0, and a fifth, `get_doc`, gained only a note about
+`#fragment` URLs. The difference was `package_status`, new in 3.6.0, and two
+sentences on the end of `list_packages`. Since 3.6.0 both named npmjs.com and
+search-engine snippets as the wrong place to look, and since 3.7.0 both told the
+model how to word the licence.
+
+**`package_status`** now states what it returns and when to use it: when the user
+asks which version is current, what licence applies, or which Node or Redis version
+is needed. **`list_packages`** is back to its approved wording, keeps the field list
+it gained in 3.6.0, and hands the version question on to `package_status`, so the
+two tools no longer read as one.
+
+**Nothing was removed from any answer.** The npm source, the time the facts were
+read and the licence note are in the result of both tools, as they were.
+`list_packages` has returned `framework.licenseNote` since 3.7.0 without declaring
+it; its output schema now declares it.
+
+**`test/descriptions.test.ts` holds the line**: no description, hosted or local, may
+name another service as the wrong place to look or tell the model how to word its
+answer. It fails on the 3.7.0 text.
+
 ## 3.5.1
 
 **Nothing changed for you.** `files` is `["dist", "SPEC.md"]`, the fix is in

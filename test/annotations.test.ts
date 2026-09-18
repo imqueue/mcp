@@ -20,30 +20,10 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-
-import { createServer, type CliHandlers } from "../src/server.js";
+import { listTools } from "./lib/list-tools.js";
 
 /** Every hint the spec defines. The whole point is that none may be missing. */
 const HINTS = ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"] as const;
-
-/** Stub handlers, so local mode registers the CLI tools without an `imq` binary. */
-const stubCli = new Proxy({}, { get: () => async () => "" }) as CliHandlers;
-
-async function listTools(mode: "local" | "remote") {
-  const server = createServer({ version: "0.0.0-test", mode, cli: mode === "local" ? stubCli : undefined });
-  const client = new Client({ name: "annotations-test", version: "0" });
-  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
-
-  await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
-
-  const { tools } = await client.listTools();
-
-  await client.close();
-
-  return tools;
-}
 
 /**
  * The values every tool must serialise, as a table rather than as logic — so a
